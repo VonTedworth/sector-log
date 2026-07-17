@@ -290,7 +290,7 @@ function tryBuild(){
     const key=String(c["Date"]).trim()+"|"+hm(parseHM(c["Out"]))+"|"+hm(parseHM(c["In"]))
     const x=xIdx[key];
     const date=parseDate(c["Date"]);
-    const totalMin=parseHM(c["Total Time"]);
+    let totalMin=parseHM(c["Total Time"]);
     const isSim = !AW169_REGS[reg];
     if(isSim) simRows++;
     if(!x && !isSim) unmatched++;
@@ -308,10 +308,15 @@ function tryBuild(){
       if(afterMin!=null && dt.getTime()<afterMin) dt=new Date(dt.getTime()+86400000);
       return dt;
     }
-    const outZ=zdt(parseHM(c["Out"]),date,null);
-    const offZ=zdt(parseHM(c["Off"]),date,outZ?outZ.getTime():null);
-    const onZ =zdt(parseHM(c["On"]), date,offZ?offZ.getTime():null);
-    const inZ =zdt(parseHM(c["In"]), date,onZ?onZ.getTime():null);
+    let outZ=zdt(parseHM(c["Out"]),date,null);
+    let offZ=zdt(parseHM(c["Off"]),date,outZ?outZ.getTime():null);
+    let onZ =zdt(parseHM(c["On"]), date,offZ?offZ.getTime():null);
+    let inZ =zdt(parseHM(c["In"]), date,onZ?onZ.getTime():null);
+
+    let rotorAdj=false;
+    if(outZ&&offZ&&outZ.getTime()===offZ.getTime()){ outZ=new Date(outZ.getTime()-5*60000); rotorAdj=true; }
+    if(inZ&&onZ&&inZ.getTime()===onZ.getTime()){ inZ=new Date(inZ.getTime()+60000); rotorAdj=true; }
+    if(rotorAdj&&outZ&&inZ) totalMin=Math.round((inZ.getTime()-outZ.getTime())/60000);
 
     const nightMin=parseHM(x?x[16]:c["Night"])||0;
     const rk=parseRemarks(c["Remarks"], nightMin, totalMin);
@@ -325,19 +330,18 @@ function tryBuild(){
     // are junk (always 1/1) and an absent line means the other pilot handled it — log zero.
     const dayTO=rk.dayTO||0, dayLdg=rk.dayLdg||0, nightTO=rk.nightTO||0, nightLdg=rk.nightLdg||0;
 
-    const remarksParts=[];
-    if(from.grid) remarksParts.push("Grid "+from.grid+" (dep)");
-    if(to.grid) remarksParts.push("Grid "+to.grid+(from.grid?" (arr)":""));
-    if(routeGrid && routeGrid!==from.grid && routeGrid!==to.grid) remarksParts.push("Grid "+routeGrid);
-    remarksParts.push(...rk.free);
-    const remarks=("GAMA - "+remarksParts.join(" | ")).replace(/ - $/," - KSS HEMS");
+    const grids=[from.grid, to.grid, routeGrid].filter((g,i,a)=>g&&a.indexOf(g)===i);
+    const segs=[];
+    if(grids.length) segs.push("KSS HEMS SITE - "+grids.join(" - "));
+    segs.push(...rk.free);
+    const remarks="GAMA - "+segs.join(" | ");
 
     sectors.push({
       key:"HCM-"+String(c["Flight #"]).trim(),
       date, dateStr:String(c["Date"]).trim(),
       reg, type:AW169_REGS[reg]||"", sim:isSim,
       from:from.place, to:to.place, blankPlaces:from.blank||to.blank,
-      outZ,offZ,onZ,inZ, totalMin, nightMin,
+      outZ,offZ,onZ,inZ, totalMin, nightMin, rotorAdj,
       ifrMin:parseHM(x?x[17]:c["IFR"])||0,
       actInstMin:rk.actInstMin,
       capacity:"SIC",            // default per Ed; toggle to P1u/s per sector
@@ -385,6 +389,7 @@ function render(){
     if(s.nightTO||s.nightLdg) chips.push(`<span class="chip on">N-T/O ${s.nightTO}/${s.nightLdg}</span>`);
     if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
     if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
+    if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
     if(s.hems) chips.push(`<span class="chip">HEMS</span>`);
     if(s.training) chips.push(`<span class="chip warn">TRAINING</span>`);
     if(s.sim) chips.push(`<span class="chip warn">SIM/UNKNOWN REG</span>`);
