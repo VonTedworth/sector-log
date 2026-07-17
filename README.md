@@ -36,7 +36,7 @@ Rows are joined on **date + local Out + local In** (verified unique across 230 r
 
 LogTen's API addresses custom fields by slot number, not display name. The slot numbers in **Field map** are guesses until calibrated:
 
-1. Field map → **Send calibration flight**. A dummy flight (01/01/2000, ZZZZ–ZZZZ) arrives with custom time slot *n* = 0:0*n*, ops/takeoff/landing slot *n* = *n*.
+1. Field map → **Send calibration flight**. A dummy flight (01/01/2028, ZZZZ–ZZZZ) arrives with custom time slot *n* = 0:0*n*, ops/takeoff/landing slot *n* = *n*.
 2. Open it in LogTen and note which of your named fields (Turbine, HEMS, NVIS Sectors, Platform T/O …) shows which value.
 3. Set the slots in Field map, save, **Mark calibrated**, then **Delete calibration flight**.
 

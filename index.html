@@ -503,7 +503,7 @@ function markImported(){
 /* ================= calibration ================= */
 function sendCalibration(){
   const e={ entity_name:"Flight", flight_key:"SL-CALIBRATION",
-    flight_flightDate:"01/01/2000", flight_from:"ZZZZ", flight_to:"ZZZZ",
+    flight_flightDate:"01/01/2028", flight_from:"ZZZZ", flight_to:"ZZZZ",
     flight_totalTime:"1:00", flight_selectedAircraftType:"AW169", flight_selectedAircraftID:"CAL-1",
     flight_remarks:"SECTOR LOG CALIBRATION FLIGHT - custom time slot n = 0:0n-style value, ops/takeoffs/landings slot n = n. Note which of YOUR named fields shows which value, set the map, then delete this flight." };
   for(let n=1;n<=20;n++){ e["flight_customTime"+n]=hm(n); e["flight_customOp"+n]=n; }
