@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Sector Log — HCM → LogTen</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#16212e; --ink-soft:#4a5a6d; --paper:#fbfaf7; --line:#d8d4ca;
+    --card:#ffffff; --accent:#0f6a4e; --accent-soft:#e2f0ea;
+    --amber:#9a6200; --amber-soft:#faf0da; --red:#a1352c; --red-soft:#f8e8e6;
+    --blue:#1d4f8f; --blue-soft:#e6eef8; --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--paper);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding-bottom:90px}
+  header{padding:18px 16px 10px;border-bottom:2px solid var(--ink);display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px}
+  header h1{font-size:19px;font-weight:700;letter-spacing:.01em}
+  header h1 small{font-weight:400;color:var(--ink-soft);font-size:13px;margin-left:8px}
+  header .hbtns{display:flex;gap:8px}
+  main{max-width:980px;margin:0 auto;padding:14px 12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);margin-bottom:10px}
+  .drop{display:flex;gap:10px;flex-wrap:wrap}
+  .dz{flex:1 1 240px;border:1.5px dashed var(--line);border-radius:8px;padding:14px;text-align:center;cursor:pointer;transition:border-color .15s, background .15s}
+  .dz.loaded{border-style:solid;border-color:var(--accent);background:var(--accent-soft)}
+  .dz .t{font-weight:600;font-size:14px}
+  .dz .s{font-size:12px;color:var(--ink-soft);margin-top:3px;font-family:var(--mono)}
+  .dz input{display:none}
+  button{font:inherit;border:1px solid var(--ink);background:var(--card);color:var(--ink);border-radius:8px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  button.primary{background:var(--ink);color:#fff}
+  button.quiet{border-color:var(--line);color:var(--ink-soft);font-weight:500}
+  button:disabled{opacity:.4;cursor:default}
+  .summary{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}
+  .summary b{font-size:20px;display:block;font-family:var(--mono);font-weight:600}
+  .warnbar{background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:14px}
+  .warnbar.red{background:var(--red-soft);border-color:#dcb0ab;color:var(--red)}
+  /* sector rows */
+  .sector{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+  .sector.excluded{opacity:.45}
+  .sector.imported{border-left:4px solid var(--accent)}
+  .srow{display:grid;grid-template-columns:86px 1fr auto;gap:8px;padding:10px 12px;align-items:center;cursor:pointer}
+  .sdate{font-family:var(--mono);font-size:12px;color:var(--ink-soft);line-height:1.5}
+  .sdate .reg{color:var(--ink);font-weight:600}
+  .sroute{min-width:0}
+  .sroute .ft{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sroute .tm{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+  .chips{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}
+  .chip{font-size:11px;font-family:var(--mono);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--ink-soft);background:var(--paper)}
+  .chip.on{background:var(--blue-soft);border-color:#b6cbe6;color:var(--blue)}
+  .chip.warn{background:var(--amber-soft);border-color:#e3c98f;color:var(--amber)}
+  .sright{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  .tt{font-family:var(--mono);font-weight:700;font-size:16px}
+  .captog{font-family:var(--mono);font-size:12px;font-weight:700;border:1.5px solid var(--line);border-radius:6px;padding:4px 9px;background:var(--paper);cursor:pointer;user-select:none}
+  .captog.p1us{background:var(--red-soft);border-color:var(--red);color:var(--red)}
+  .captog.sic{background:var(--blue-soft);border-color:var(--blue);color:var(--blue)}
+  .detail{display:none;border-top:1px solid var(--line);padding:12px;background:var(--paper)}
+  .sector.open .detail{display:block}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+  .fld label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:2px}
+  .fld input,.fld select,.fld textarea{width:100%;font:13px var(--mono);padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+  .fld.wide{grid-column:1/-1}
+  .fld textarea{font-family:inherit;min-height:56px;resize:vertical}
+  .rowbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  /* footer action bar */
+  .actionbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:2px solid var(--ink);padding:10px 14px calc(10px + env(safe-area-inset-bottom));display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .actionbar .n{font-size:13px;color:var(--ink-soft)}
+  .actionbar .btns{display:flex;gap:8px;flex-wrap:wrap}
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(22,33,46,.45);display:none;align-items:flex-start;justify-content:center;padding:20px;z-index:50;overflow:auto}
+  .modal.open{display:flex}
+  .mbox{background:var(--card);border-radius:12px;max-width:640px;width:100%;padding:18px;margin:auto 0}
+  .mbox h3{font-size:16px;margin-bottom:10px}
+  .mbox p{font-size:13px;color:var(--ink-soft);margin-bottom:10px}
+  table.map{width:100%;border-collapse:collapse;font-size:13px}
+  table.map td{padding:4px 6px;border-bottom:1px solid var(--line)}
+  table.map td:first-child{font-weight:600}
+  table.map select,table.map input{font:13px var(--mono);padding:4px;border:1px solid var(--line);border-radius:5px;width:100%}
+  .aliasrow{display:grid;grid-template-columns:1fr 24px 1fr 30px;gap:6px;align-items:center;margin-bottom:6px;font-family:var(--mono);font-size:12px}
+  .aliasrow input{font:12px var(--mono);padding:5px;border:1px solid var(--line);border-radius:5px}
+  .aliasrow .del{background:none;border:none;color:var(--red);font-size:16px;padding:0;cursor:pointer}
+  .empty{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:14px}
+  .uncal{font-size:12px;background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:6px;padding:6px 9px;margin-bottom:10px;display:none}
+  .uncal.show{display:block}
+  @media(max-width:560px){.srow{grid-template-columns:70px 1fr auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sector Log<small>HeliCrew Manager → LogTen</small></h1>
+  <div class="hbtns">
+    <button class="quiet" onclick="openMapping()">Field map</button>
+    <button class="quiet" onclick="openAliases()">Places</button>
+  </div>
+</header>
+<main>
+  <div id="uncal" class="uncal"><b>Custom field map not calibrated.</b> Open “Field map” and run the calibration flight before your first real import — otherwise custom values may land in the wrong LogTen fields.</div>
+
+  <div class="card">
+    <h2>Exports from HeliCrew Manager</h2>
+    <div class="drop">
+      <label class="dz" id="dzX"><input type="file" accept=".xlsx" onchange="fileIn(this,'xlsx')">
+        <div class="t">Excel download</div><div class="s" id="dzXs">.xlsx — Zulu times, commander, grids</div></label>
+      <label class="dz" id="dzC"><input type="file" accept=".csv" onchange="fileIn(this,'csv')">
+        <div class="t">LogTen Pro CSV download</div><div class="s" id="dzCs">.csv — flight keys, block times</div></label>
+    </div>
+    <div id="parseMsg" style="margin-top:10px;font-size:13px;color:var(--ink-soft)"></div>
+  </div>
+
+  <div class="card" id="sumCard" style="display:none">
+    <h2>Batch</h2>
+    <div class="summary" id="summary"></div>
+  </div>
+
+  <div id="warnings"></div>
+  <div id="sectors"></div>
+</main>
+
+<div class="actionbar" id="actionbar" style="display:none">
+  <span class="n" id="abN"></span>
+  <div class="btns">
+    <button class="quiet" onclick="markImported()">Mark batch imported</button>
+    <button class="primary" id="sendBtn" onclick="sendNext()">Send to LogTen</button>
+  </div>
+</div>
+
+<!-- Field mapping modal -->
+<div class="modal" id="mapModal"><div class="mbox">
+  <h3>Custom field map</h3>
+  <p>LogTen addresses custom fields by slot number, not by the names you gave them. Run the calibration flight, read which of your named fields received which value, then set the slots here. Saved on this device.</p>
+  <table class="map" id="mapTable"></table>
+  <div class="rowbtns">
+    <button onclick="sendCalibration()">Send calibration flight</button>
+    <button class="quiet" onclick="deleteCalibration()">Delete calibration flight</button>
+    <button class="quiet" id="calDone" onclick="markCalibrated()">Mark calibrated</button>
+    <button class="primary" onclick="saveMapping()">Save & close</button>
+  </div>
+</div></div>
+
+<!-- Alias modal -->
+<div class="modal" id="aliasModal"><div class="mbox">
+  <h3>Place names</h3>
+  <p>HCM place name → the name used in your LogTen. Grid references are handled automatically (logged as <span style="font-family:var(--mono)">KSS HEMS SITE</span>, grid noted in remarks). Matching is case-insensitive.</p>
+  <div id="aliasList"></div>
+  <div class="rowbtns">
+    <button class="quiet" onclick="addAlias('','')">Add row</button>
+    <button class="primary" onclick="saveAliases()">Save & close</button>
+  </div>
+</div></div>
+
+<script>
+"use strict";
+/* ================= configuration & persistence ================= */
+const LS = { map:"sl_mapping", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
+const SELF_NAME = "Edward Worsley";
+const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
+                   dateFormat:"MM/dd/yyyy", dateAndTimeFormat:"MM/dd/yyyy HH:mm", timesAreZulu:true };
+const AW169_REGS = { "G-KSST":"AW169","G-KSSC":"AW169","G-LNAC":"AW169","G-MGPS":"AW169" };
+const TRAINING_RX = /\b(OPC|LPC|TRAINING|RECURRENT|LOFT|CX FLIGHT|ATPL)\b/i;
+
+// Named custom fields -> LogTen slot. kind: time | op | takeoff | landing. Slots are GUESSES until calibrated.
+const DEFAULT_MAP = {
+  "Turbine":      {kind:"time", slot:1},
+  "Twin Turbine": {kind:"time", slot:2},
+  "HEMS":         {kind:"time", slot:3},
+  "Offshore":     {kind:"time", slot:4},
+  "Mountain":     {kind:"time", slot:5},
+  "Sling":        {kind:"time", slot:6},
+  "3D":           {kind:"op",   slot:1},
+  "2D":           {kind:"op",   slot:2},
+  "IFR Sectors":  {kind:"op",   slot:3},
+  "NVIS Sectors": {kind:"op",   slot:4},
+  "Platform T/O": {kind:"takeoff", slot:1},
+  "Platform Ldg": {kind:"landing", slot:1},
+};
+const DEFAULT_ALIASES = {
+  "redhill":"EGKR",
+  "rochester airport - kss hq":"EGTO",
+  "l01 kings collage hospital london":"KINGS COLLEGE HOSPITAL LONDON",
+  "kings college hospital":"KINGS COLLEGE HOSPITAL LONDON",
+  "l03 st. georges hospital london":"ST GEORGES HOSPITAL LONDON",
+  "st georges hospital":"ST GEORGES HOSPITAL LONDON",
+  "se01 william harvey hospital ashford":"WILLIAM HARVEY HOSPITAL",
+  "lkch ruskin park":"KINGS COLLEGE HOSPITAL LONDON",
+};
+let mapping  = JSON.parse(localStorage.getItem(LS.map)   || "null") || structuredClone(DEFAULT_MAP);
+let aliases  = JSON.parse(localStorage.getItem(LS.alias) || "null") || structuredClone(DEFAULT_ALIASES);
+let imported = new Set(JSON.parse(localStorage.getItem(LS.imported) || "[]"));
+let calibrated = localStorage.getItem(LS.cal) === "1";
+
+/* ================= small utils ================= */
+const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+function parseHM(s){ if(s==null) return null; s=String(s).trim(); const m=s.match(/^(\d{1,2}):(\d{2})/); return m? (+m[1])*60+(+m[2]) : null; }
+function hm(min){ if(min==null||isNaN(min)) return ""; min=Math.round(min); return Math.floor(min/60)+":"+String(min%60).padStart(2,"0"); }
+function parseDate(s){ const m=String(s).trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/); return m? new Date(Date.UTC(+m[3],MONTHS[m[2]],+m[1])) : null; }
+function fmtDT(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear()+" "+String(d.getUTCHours()).padStart(2,"0")+":"+String(d.getUTCMinutes()).padStart(2,"0"); }
+function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear(); }
+function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
+function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/.test(String(s||"").trim()); }
+function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+/* ================= file intake ================= */
+let rawCSV=null, rawXLSX=null, sectors=[];
+function fileIn(inp, kind){
+  const f=inp.files[0]; if(!f) return;
+  const r=new FileReader();
+  if(kind==="csv"){
+    r.onload=e=>{ rawCSV = Papa.parse(e.target.result,{header:true,skipEmptyLines:true}).data;
+      document.getElementById("dzC").classList.add("loaded");
+      document.getElementById("dzCs").textContent=f.name+" — "+rawCSV.length+" rows"; tryBuild(); };
+    r.readAsText(f);
+  } else {
+    r.onload=e=>{ const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      rawXLSX = XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:""}).slice(2);
+      document.getElementById("dzX").classList.add("loaded");
+      document.getElementById("dzXs").textContent=f.name+" — "+rawXLSX.length+" rows"; tryBuild(); };
+    r.readAsArrayBuffer(f);
+  }
+}
+
+/* ================= remark parsing ================= */
+function collapseRepeats(line){
+  // "RTB Redhill RTB Redhill" / "HOS C HOS C HOS C" -> single occurrence
+  const t=line.trim();
+  for(const n of [3,2]){
+    if(t.length<4) break;
+    const L=t.length;
+    if(L%n===0){ const seg=t.slice(0,L/n); if(seg.repeat(n)===t) return seg.trim(); }
+    const sp=(t+" ").repeat(1); // repeat with space separators
+    const parts=t.split(" ");
+    if(parts.length%n===0){ const k=parts.length/n; const seg=parts.slice(0,k).join(" ");
+      if(Array(n).fill(seg).join(" ")===t) return seg; }
+  }
+  return t;
+}
+function parseRemarks(raw, sectorNightMin, totalMin){
+  const out={ dayTO:null,dayLdg:null,nightTO:null,nightLdg:null, platTO:0,platLdg:0,
+              nvisSectors:0,nvgMin:0, ifrSectors:0, actInstMin:0, free:[] };
+  for(let line of String(raw||"").split(/\n+/)){
+    line=line.trim(); if(!line) continue;
+    const m=line.match(/^(\d+)\s*x\s*(.+)$/i);
+    if(m){
+      const n=+m[1], what=m[2].trim();
+      const mins=(what.match(/\((\d+)\s*mins?\)/i)||[])[1];
+      if(/^Takeoffs Day/i.test(what)) out.dayTO=(out.dayTO||0)+n;
+      else if(/^Landings Day/i.test(what)) out.dayLdg=(out.dayLdg||0)+n;
+      else if(/^Takeoffs Night/i.test(what)) out.nightTO=(out.nightTO||0)+n;
+      else if(/^Landings Night/i.test(what)) out.nightLdg=(out.nightLdg||0)+n;
+      else if(/^Elevated Helipads? Take ?offs?/i.test(what)) out.platTO+=n;
+      else if(/^Elevated Helipads? Landings?/i.test(what)) out.platLdg+=n;
+      else if(/^Elevated Helipads? TOLO/i.test(what)){ out.platTO+=n; out.platLdg+=n; }
+      else if(/^NVIS Flight Currency/i.test(what)){ out.nvisSectors+=n; out.nvgMin += mins? +mins : (sectorNightMin||0); }
+      else if(/^Instrument Approaches?/i.test(what)) out.ifrSectors+=n;
+      else out.free.push(collapseRepeats(line));
+    } else if(/^Sole Reference to Instruments/i.test(line)){
+      const mins=(line.match(/\((\d+)\s*mins?\)/i)||[])[1]; out.actInstMin += mins? +mins : 0;
+      out.free.push(collapseRepeats(line));
+    } else out.free.push(collapseRepeats(line));
+  }
+  out.nvgMin=Math.min(out.nvgMin, totalMin||out.nvgMin);
+  // de-dup free lines
+  out.free=[...new Set(out.free)];
+  return out;
+}
+function aliasPlace(name){
+  const t=String(name||"").trim();
+  if(!t) return {place:"", grid:null, blank:true};
+  if(isGrid(t)) return {place:"KSS HEMS SITE", grid:t.replace(/\s/g,""), blank:false};
+  const a=aliases[t.toLowerCase()];
+  return {place:a||t.toUpperCase(), grid:null, blank:false};
+}
+
+/* ================= build sectors ================= */
+function tryBuild(){
+  const msg=document.getElementById("parseMsg");
+  if(!rawCSV||!rawXLSX){ msg.textContent="Load both files — they carry complementary data."; return; }
+  const xIdx={};
+  for(const r of rawXLSX){
+    if(!r[0]||String(r[8]).trim()==="AIRMAESTRO") continue;
+    const k=String(r[0]).trim()+"|"+hm(parseHM(r[3]))+"|"+hm(parseHM(r[6]));
+    xIdx[k]=r;
+  }
+  sectors=[]; let unmatched=0, simRows=0;
+  for(const c of rawCSV){
+    if(!c["Date"]||String(c["Aircraft ID"]).trim()==="AIRMAESTRO") continue;
+    const reg=String(c["Aircraft ID"]).trim();
+    const key=String(c["Date"]).trim()+"|"+hm(parseHM(c["Out"]))+"|"+hm(parseHM(c["In"]))
+    const x=xIdx[key];
+    const date=parseDate(c["Date"]);
+    const totalMin=parseHM(c["Total Time"]);
+    const isSim = !AW169_REGS[reg];
+    if(isSim) simRows++;
+    if(!x && !isSim) unmatched++;
+
+    // Zulu datetimes. xlsx: [2]=depZ [3]=depL [5]=arrZ [6]=arrL. CSV Out/Off/On/In are LOCAL.
+    const depZ=x?parseHM(x[2]):null, depL=x?parseHM(x[3]):parseHM(c["Out"]);
+    const offset = (depZ!=null&&depL!=null) ? ((depL-depZ+1440)%1440)/60 : 0; // hours local-Z
+    function zdt(localMin, baseDate, afterMin){ // convert local HH:MM to Z Date, rolling days as needed
+      if(localMin==null) return null;
+      let zmin=localMin-offset*60;
+      const d=new Date(baseDate);
+      if(zmin<0){ zmin+=1440; d.setUTCDate(d.getUTCDate()-1); }
+      // roll forward past midnight relative to a reference
+      let dt=new Date(d); dt.setUTCMinutes(zmin);
+      if(afterMin!=null && dt.getTime()<afterMin) dt=new Date(dt.getTime()+86400000);
+      return dt;
+    }
+    const outZ=zdt(parseHM(c["Out"]),date,null);
+    const offZ=zdt(parseHM(c["Off"]),date,outZ?outZ.getTime():null);
+    const onZ =zdt(parseHM(c["On"]), date,offZ?offZ.getTime():null);
+    const inZ =zdt(parseHM(c["In"]), date,onZ?onZ.getTime():null);
+
+    const nightMin=parseHM(x?x[16]:c["Night"])||0;
+    const rk=parseRemarks(c["Remarks"], nightMin, totalMin);
+    const commanderRaw=x?String(x[13]||"").trim():"";
+    const commander=commanderRaw.split("/").map(s=>s.trim()).filter(s=>s&&s.toUpperCase()!=="SELF")[0]||"";
+    const from=aliasPlace(x?x[1]:c["From"]);
+    const to  =aliasPlace(x?x[4]:c["To"]);
+    const routeGrid = isGrid(c["Route"]) ? String(c["Route"]).trim() : null;
+    const training = TRAINING_RX.test(String(c["Remarks"]||""));
+    // T/O & landing counts come ONLY from the crew-entered remark lines. HCM's CSV columns
+    // are junk (always 1/1) and an absent line means the other pilot handled it — log zero.
+    const dayTO=rk.dayTO||0, dayLdg=rk.dayLdg||0, nightTO=rk.nightTO||0, nightLdg=rk.nightLdg||0;
+
+    const remarksParts=[];
+    if(from.grid) remarksParts.push("Grid "+from.grid+" (dep)");
+    if(to.grid) remarksParts.push("Grid "+to.grid+(from.grid?" (arr)":""));
+    if(routeGrid && routeGrid!==from.grid && routeGrid!==to.grid) remarksParts.push("Grid "+routeGrid);
+    remarksParts.push(...rk.free);
+    const remarks=("GAMA - "+remarksParts.join(" | ")).replace(/ - $/," - KSS HEMS");
+
+    sectors.push({
+      key:"HCM-"+String(c["Flight #"]).trim(),
+      date, dateStr:String(c["Date"]).trim(),
+      reg, type:AW169_REGS[reg]||"", sim:isSim,
+      from:from.place, to:to.place, blankPlaces:from.blank||to.blank,
+      outZ,offZ,onZ,inZ, totalMin, nightMin,
+      ifrMin:parseHM(x?x[17]:c["IFR"])||0,
+      actInstMin:rk.actInstMin,
+      capacity:"SIC",            // default per Ed; toggle to P1u/s per sector
+      hems: !training && !isSim, // HEMS time = total unless training/sim
+      training,
+      commander,
+      dayTO,dayLdg,nightTO,nightLdg,
+      platTO:rk.platTO, platLdg:rk.platLdg,
+      nvisSectors:rk.nvisSectors, nvgMin:rk.nvgMin, ifrSectors:rk.ifrSectors,
+      remarks,
+      matched:!!x,
+      include:!isSim,
+      already:imported.has("HCM-"+String(c["Flight #"]).trim()),
+    });
+  }
+  sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
+  msg.textContent="";
+  const warn=[];
+  if(unmatched) warn.push(unmatched+" sector(s) could not be matched between the two files — check their times before sending.");
+  if(simRows) warn.push(simRows+" simulator/unknown-registration row(s) (e.g. CP-818) are excluded by default — log sim details manually or include and edit.");
+  document.getElementById("warnings").innerHTML=warn.map(w=>`<div class="warnbar">${esc(w)}</div>`).join("");
+  render();
+}
+
+/* ================= render ================= */
+function render(){
+  const el=document.getElementById("sectors");
+  document.getElementById("uncal").classList.toggle("show", !calibrated);
+  if(!sectors.length){ el.innerHTML=""; document.getElementById("sumCard").style.display="none"; document.getElementById("actionbar").style.display="none"; return; }
+  const pend=sectors.filter(s=>s.include&&!s.already);
+  const tot=pend.reduce((a,s)=>a+(s.totalMin||0),0);
+  const p1=pend.filter(s=>s.capacity==="P1u/s").reduce((a,s)=>a+(s.totalMin||0),0);
+  document.getElementById("sumCard").style.display="";
+  document.getElementById("summary").innerHTML=
+    `<div><b>${pend.length}</b>to send</div>
+     <div><b>${hm(tot)}</b>total time</div>
+     <div><b>${hm(p1)}</b>as P1u/s</div>
+     <div><b>${sectors.filter(s=>s.already).length}</b>already imported</div>`;
+  el.innerHTML=sectors.map((s,i)=>{
+    const chips=[];
+    if(s.nightMin) chips.push(`<span class="chip on">NT ${hm(s.nightMin)}</span>`);
+    if(s.nvisSectors) chips.push(`<span class="chip on">NVIS×${s.nvisSectors} ${hm(s.nvgMin)}</span>`);
+    if(s.platTO||s.platLdg) chips.push(`<span class="chip on">PLAT ${s.platTO}/${s.platLdg}</span>`);
+    if(s.nightTO||s.nightLdg) chips.push(`<span class="chip on">N-T/O ${s.nightTO}/${s.nightLdg}</span>`);
+    if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
+    if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
+    if(s.hems) chips.push(`<span class="chip">HEMS</span>`);
+    if(s.training) chips.push(`<span class="chip warn">TRAINING</span>`);
+    if(s.sim) chips.push(`<span class="chip warn">SIM/UNKNOWN REG</span>`);
+    if(!s.matched&&!s.sim) chips.push(`<span class="chip warn">UNMATCHED</span>`);
+    if(s.blankPlaces) chips.push(`<span class="chip warn">CHECK FROM/TO</span>`);
+    return `<div class="sector ${s.include?"":"excluded"} ${s.already?"imported":""}" id="sec${i}">
+      <div class="srow" onclick="toggleOpen(${i})">
+        <div class="sdate">${shortD(s.date)}<br><span class="reg">${esc(s.reg)}</span></div>
+        <div class="sroute">
+          <div class="ft">${esc(s.from||"—")} → ${esc(s.to||"—")}</div>
+          <div class="tm">${s.offZ?fmtDT(s.offZ).slice(11):"--:--"}–${s.onZ?fmtDT(s.onZ).slice(11):"--:--"}Z · ${esc(s.commander||"no cdr")}</div>
+          <div class="chips">${chips.join("")}</div>
+        </div>
+        <div class="sright">
+          <span class="tt">${hm(s.totalMin)}</span>
+          <span class="captog ${s.capacity==="P1u/s"?"p1us":"sic"}" onclick="event.stopPropagation();toggleCap(${i})">${s.capacity}</span>
+        </div>
+      </div>
+      <div class="detail">${detailForm(s,i)}</div>
+    </div>`;
+  }).join("");
+  const chunks=makeChunks().length;
+  document.getElementById("actionbar").style.display=pend.length?"":"none";
+  document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)";
+  document.getElementById("sendBtn").textContent = chunks>1? "Send batch 1 of "+chunks : "Send to LogTen";
+  sendIdx=0;
+}
+function detailForm(s,i){
+  const F=(label,prop,val)=>`<div class="fld"><label>${label}</label><input value="${esc(val)}" onchange="upd(${i},'${prop}',this.value)"></div>`;
+  return `<div class="fgrid">
+    ${F("From","from",s.from)}${F("To","to",s.to)}
+    ${F("Commander","commander",s.commander)}
+    ${F("Total","totalMin",hm(s.totalMin))}${F("Night","nightMin",hm(s.nightMin))}
+    ${F("NVG time","nvgMin",hm(s.nvgMin))}${F("Act inst","actInstMin",hm(s.actInstMin))}
+    ${F("Day T/O","dayTO",s.dayTO)}${F("Day Ldg","dayLdg",s.dayLdg)}
+    ${F("Night T/O","nightTO",s.nightTO)}${F("Night Ldg","nightLdg",s.nightLdg)}
+    ${F("Plat T/O","platTO",s.platTO)}${F("Plat Ldg","platLdg",s.platLdg)}
+    ${F("NVIS sectors","nvisSectors",s.nvisSectors)}${F("IFR sectors","ifrSectors",s.ifrSectors)}
+    <div class="fld wide"><label>Remarks</label><textarea onchange="upd(${i},'remarks',this.value)">${esc(s.remarks)}</textarea></div>
+  </div>
+  <div class="rowbtns">
+    <button class="quiet" onclick="upd(${i},'hems',${!s.hems});render()">HEMS time: ${s.hems?"ON — tap to remove":"OFF — tap to add"}</button>
+    <button class="quiet" onclick="upd(${i},'include',${!s.include});render()">${s.include?"Exclude sector":"Include sector"}</button>
+  </div>`;
+}
+function toggleOpen(i){ document.getElementById("sec"+i).classList.toggle("open"); }
+function toggleCap(i){ sectors[i].capacity = sectors[i].capacity==="SIC" ? "P1u/s" : "SIC"; render(); }
+function upd(i,prop,val){
+  const s=sectors[i];
+  if(["totalMin","nightMin","nvgMin","actInstMin"].includes(prop)) s[prop]=parseHM(val)??0;
+  else if(["dayTO","dayLdg","nightTO","nightLdg","platTO","platLdg","nvisSectors","ifrSectors"].includes(prop)) s[prop]=parseInt(val)||0;
+  else s[prop]=val;
+}
+
+/* ================= LogTen payload ================= */
+function slotAttr(name){ const m=mapping[name]; if(!m||!m.slot) return null;
+  return {time:"flight_customTime",op:"flight_customOp",takeoff:"flight_customTakeoff",landing:"flight_customLanding"}[m.kind]+m.slot; }
+function entityFor(s){
+  const e={ entity_name:"Flight", flight_key:s.key,
+    flight_flightNumber:"GAMA",
+    flight_flightDate:fmtD(s.date),
+    flight_selectedAircraftType:s.type||"AW169",
+    flight_selectedAircraftID:s.reg,
+    flight_from:s.from, flight_to:s.to,
+    flight_totalTime:hm(s.totalMin),
+    flight_multiPilot:hm(s.totalMin),
+    flight_crossCountry:hm(s.totalMin),
+    flight_remarks:s.remarks,
+    flight_selectedCrewSIC:SELF_NAME,
+  };
+  if(s.commander) e.flight_selectedCrewPIC=s.commander;
+  if(s.outZ) e.flight_actualDepartureTime=fmtDT(s.outZ);
+  if(s.offZ) e.flight_takeoffTime=fmtDT(s.offZ);
+  if(s.onZ)  e.flight_landingTime=fmtDT(s.onZ);
+  if(s.inZ)  e.flight_actualArrivalTime=fmtDT(s.inZ);
+  if(s.capacity==="P1u/s") e.flight_p1us=hm(s.totalMin); else e.flight_sic=hm(s.totalMin);
+  if(s.nightMin) e.flight_night=hm(s.nightMin);
+  if(s.nvgMin) e.flight_nightVisionGoggle=hm(s.nvgMin);
+  if(s.actInstMin) e.flight_actualInstrument=hm(s.actInstMin);
+  if(s.ifrMin) e.flight_ifr=hm(s.ifrMin);
+  if(s.dayTO) e.flight_dayTakeoffs=s.dayTO;
+  if(s.dayLdg) e.flight_dayLandings=s.dayLdg;
+  if(s.nightTO) e.flight_nightTakeoffs=s.nightTO;
+  if(s.nightLdg) e.flight_nightLandings=s.nightLdg;
+  if(s.nvisSectors&&s.nightTO) e.flight_nightVisionGoggleTakeoffs=s.nightTO;
+  if(s.nvisSectors&&s.nightLdg) e.flight_nightVisionGoggleLandings=s.nightLdg;
+  const put=(name,val)=>{ const a=slotAttr(name); if(a&&val) e[a]= a.includes("customTime")? hm(val): val; };
+  put("Turbine",s.totalMin); put("Twin Turbine",s.totalMin);
+  if(s.hems) put("HEMS",s.totalMin);
+  put("NVIS Sectors",s.nvisSectors); put("IFR Sectors",s.ifrSectors);
+  put("Platform T/O",s.platTO); put("Platform Ldg",s.platLdg);
+  return e;
+}
+function makeChunks(){
+  const pend=sectors.filter(s=>s.include&&!s.already);
+  const chunks=[]; const SIZE=15;
+  for(let i=0;i<pend.length;i+=SIZE) chunks.push(pend.slice(i,i+SIZE));
+  return chunks;
+}
+let sendIdx=0;
+function sendNext(){
+  const chunks=makeChunks(); if(!chunks.length) return;
+  const batch=chunks[Math.min(sendIdx,chunks.length-1)];
+  const pkg={ metadata:APP_META, entities:batch.map(entityFor) };
+  location.href="logten://v2/addEntities?package="+encodeURIComponent(JSON.stringify(pkg));
+  sendIdx++;
+  const btn=document.getElementById("sendBtn");
+  if(sendIdx>=chunks.length){ btn.textContent="All batches sent — mark imported when confirmed"; }
+  else btn.textContent="Send batch "+(sendIdx+1)+" of "+chunks.length;
+}
+function markImported(){
+  for(const s of sectors) if(s.include&&!s.already){ imported.add(s.key); s.already=true; }
+  localStorage.setItem(LS.imported, JSON.stringify([...imported]));
+  render();
+}
+
+/* ================= calibration ================= */
+function sendCalibration(){
+  const e={ entity_name:"Flight", flight_key:"SL-CALIBRATION",
+    flight_flightDate:"01/01/2000", flight_from:"ZZZZ", flight_to:"ZZZZ",
+    flight_totalTime:"1:00", flight_selectedAircraftType:"AW169", flight_selectedAircraftID:"CAL-1",
+    flight_remarks:"SECTOR LOG CALIBRATION FLIGHT - custom time slot n = 0:0n-style value, ops/takeoffs/landings slot n = n. Note which of YOUR named fields shows which value, set the map, then delete this flight." };
+  for(let n=1;n<=20;n++){ e["flight_customTime"+n]=hm(n); e["flight_customOp"+n]=n; }
+  for(let n=1;n<=10;n++){ e["flight_customTakeoff"+n]=n; e["flight_customLanding"+n]=n; e["flight_customNote"+n]="NOTE "+n; }
+  const pkg={metadata:APP_META, entities:[e]};
+  location.href="logten://v2/addEntities?package="+encodeURIComponent(JSON.stringify(pkg));
+}
+function deleteCalibration(){
+  const pkg={metadata:APP_META, entities:[], removeEntities:[{entity_name:"Flight", flight_key:"SL-CALIBRATION"}]};
+  location.href="logten://v2/modifyEntities?package="+encodeURIComponent(JSON.stringify(pkg));
+}
+function markCalibrated(){ calibrated=true; localStorage.setItem(LS.cal,"1"); render(); }
+
+/* ================= mapping & alias modals ================= */
+function openMapping(){
+  const t=document.getElementById("mapTable");
+  t.innerHTML="<tr><td>Field</td><td>Kind</td><td>Slot</td></tr>"+Object.entries(mapping).map(([name,m])=>`
+    <tr><td>${esc(name)}</td>
+    <td><select data-n="${esc(name)}" data-k="kind">
+      ${["time","op","takeoff","landing"].map(k=>`<option ${m.kind===k?"selected":""}>${k}</option>`).join("")}</select></td>
+    <td><input type="number" min="1" max="20" value="${m.slot}" data-n="${esc(name)}" data-k="slot"></td></tr>`).join("");
+  document.getElementById("mapModal").classList.add("open");
+}
+function saveMapping(){
+  document.querySelectorAll("#mapTable [data-n]").forEach(el=>{
+    const m=mapping[el.dataset.n]; if(!m) return;
+    if(el.dataset.k==="kind") m.kind=el.value; else m.slot=parseInt(el.value)||m.slot;
+  });
+  localStorage.setItem(LS.map, JSON.stringify(mapping));
+  document.getElementById("mapModal").classList.remove("open"); render();
+}
+function openAliases(){
+  const box=document.getElementById("aliasList"); box.innerHTML="";
+  Object.entries(aliases).forEach(([k,v])=>addAlias(k,v));
+  document.getElementById("aliasModal").classList.add("open");
+}
+function addAlias(k,v){
+  const box=document.getElementById("aliasList");
+  const row=document.createElement("div"); row.className="aliasrow";
+  row.innerHTML=`<input placeholder="HCM name" value="${esc(k)}"><span>→</span><input placeholder="LogTen name" value="${esc(v)}"><button class="del" onclick="this.parentElement.remove()">×</button>`;
+  box.appendChild(row);
+}
+function saveAliases(){
+  const out={};
+  document.querySelectorAll("#aliasList .aliasrow").forEach(r=>{
+    const [a,b]=r.querySelectorAll("input");
+    if(a.value.trim()&&b.value.trim()) out[a.value.trim().toLowerCase()]=b.value.trim();
+  });
+  aliases=out; localStorage.setItem(LS.alias, JSON.stringify(aliases));
+  document.getElementById("aliasModal").classList.remove("open");
+  if(rawCSV&&rawXLSX) tryBuild();
+}
+document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
+</script>
+</body>
+</html>
