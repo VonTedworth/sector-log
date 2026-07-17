@@ -153,7 +153,7 @@
 <script>
 "use strict";
 /* ================= configuration & persistence ================= */
-const LS = { map:"sl_mapping2", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
+const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
                    dateFormat:"MM/dd/yyyy", dateAndTimeFormat:"MM/dd/yyyy HH:mm", timesAreZulu:true };
@@ -162,12 +162,12 @@ const TRAINING_RX = /\b(OPC|LPC|TRAINING|RECURRENT|LOFT|CX FLIGHT|ATPL)\b/i;
 
 // Named custom fields -> LogTen slot. kind: time | op | takeoff | landing. Slots are GUESSES until calibrated.
 const DEFAULT_MAP = {
-  "Turbine":      {kind:"time", slot:1},
-  "Twin Turbine": {kind:"time", slot:2},
-  "HEMS":         {kind:"time", slot:3},
-  "Offshore":     {kind:"time", slot:4},
-  "Mountain":     {kind:"time", slot:5},
-  "Sling":        {kind:"time", slot:6},
+  "Turbine":      {kind:"time", slot:4},
+  "Twin Turbine": {kind:"time", slot:9},
+  "HEMS":         {kind:"time", slot:5},
+  "Offshore":     {kind:"time", slot:6},
+  "Mountain":     {kind:"time", slot:3},
+  "Sling":        {kind:"time", slot:2},
   "3D":           {kind:"op",   slot:7},
   "2D":           {kind:"op",   slot:17},
   "IFR Sectors":  {kind:"op",   slot:1},
