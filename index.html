@@ -81,6 +81,10 @@
   .aliasrow{display:grid;grid-template-columns:1fr 24px 1fr 30px;gap:6px;align-items:center;margin-bottom:6px;font-family:var(--mono);font-size:12px}
   .aliasrow input{font:12px var(--mono);padding:5px;border:1px solid var(--line);border-radius:5px}
   .aliasrow .del{background:none;border:none;color:var(--red);font-size:16px;padding:0;cursor:pointer}
+  .placerow{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px}
+  .placerow .pname{font-weight:600;margin-bottom:6px}
+  .placerow label{display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px}
+  .placerow .namedInput{flex:1;font:13px var(--mono);padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
   .empty{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:14px}
   .uncal{font-size:12px;background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:6px;padding:6px 9px;margin-bottom:10px;display:none}
   .uncal.show{display:block}
@@ -115,6 +119,7 @@
   </div>
 
   <div id="warnings"></div>
+  <div id="placeWarn"></div>
   <div id="sectors"></div>
 </main>
 
@@ -147,6 +152,17 @@
   <div class="rowbtns">
     <button class="quiet" onclick="addAlias('','')">Add row</button>
     <button class="primary" onclick="saveAliases()">Save & close</button>
+  </div>
+</div></div>
+
+<!-- Unrecognised place resolution modal -->
+<div class="modal" id="resolveModal"><div class="mbox">
+  <h3>Unrecognised places</h3>
+  <p>LogTen doesn't already know these From/To names. Choose HEMS Site, an existing named site, or create a new one — each choice is remembered so you're never asked again.</p>
+  <datalist id="siteOptions"></datalist>
+  <div id="resolveList"></div>
+  <div class="rowbtns">
+    <button class="primary" onclick="saveResolutions()">Save & rebuild</button>
   </div>
 </div></div>
 
@@ -199,12 +215,20 @@ function fmtDT(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d
 function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear(); }
 function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
 function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/.test(String(s||"").trim()); }
+function isICAO(s){ return /^[A-Z]{4}$/i.test(String(s||"").trim()); }
+function isKnownPlace(raw){
+  const t=String(raw||"").trim();
+  if(!t) return true; // blank is a separate warning (CHECK FROM/TO), not an unrecognised name
+  if(isGrid(t)) return true;
+  if(isICAO(t)) return true;
+  return !!aliases[t.toLowerCase()];
+}
 const HELIPAD_KEYWORDS = ["KINGS COLLEGE","ST GEORGE","ROYAL SUSSEX","ROYAL BRIGHTON"];
 function isHelipad(place){ const P=String(place||"").toUpperCase(); return HELIPAD_KEYWORDS.some(k=>P.includes(k)); }
 function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 /* ================= file intake ================= */
-let rawCSV=null, rawXLSX=null, sectors=[];
+let rawCSV=null, rawXLSX=null, sectors=[], unresolvedPlaces=[];
 function fileIn(inp, kind){
   const f=inp.files[0]; if(!f) return;
   const r=new FileReader();
@@ -285,7 +309,7 @@ function tryBuild(){
     const k=String(r[0]).trim()+"|"+hm(parseHM(r[3]))+"|"+hm(parseHM(r[6]));
     xIdx[k]=r;
   }
-  sectors=[]; let unmatched=0, simRows=0;
+  sectors=[]; let unmatched=0, simRows=0; const unresolvedMap=new Map();
   for(const c of rawCSV){
     if(!c["Date"]||String(c["Aircraft ID"]).trim()==="AIRMAESTRO") continue;
     const reg=String(c["Aircraft ID"]).trim();
@@ -324,8 +348,13 @@ function tryBuild(){
     const rk=parseRemarks(c["Remarks"], nightMin, totalMin);
     const commanderRaw=x?String(x[13]||"").trim():"";
     const commander=commanderRaw.split("/").map(s=>s.trim()).filter(s=>s&&s.toUpperCase()!=="SELF")[0]||"";
-    const from=aliasPlace(x?x[1]:c["From"]);
-    const to  =aliasPlace(x?x[4]:c["To"]);
+    const fromRaw=x?x[1]:c["From"], toRaw=x?x[4]:c["To"];
+    [fromRaw,toRaw].forEach(raw=>{
+      const t=String(raw||"").trim();
+      if(t && !isKnownPlace(t)){ const k=t.toLowerCase(); if(!unresolvedMap.has(k)) unresolvedMap.set(k,t); }
+    });
+    const from=aliasPlace(fromRaw);
+    const to  =aliasPlace(toRaw);
     const routeGrid = isGrid(c["Route"]) ? String(c["Route"]).trim() : null;
     const training = TRAINING_RX.test(String(c["Remarks"]||""));
     // T/O & landing counts come ONLY from the crew-entered remark lines. HCM's CSV columns
@@ -365,6 +394,7 @@ function tryBuild(){
     });
   }
   sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
+  unresolvedPlaces=[...unresolvedMap.values()];
   msg.textContent="";
   const warn=[];
   if(unmatched) warn.push(unmatched+" sector(s) could not be matched between the two files — check their times before sending.");
@@ -377,6 +407,10 @@ function tryBuild(){
 function render(){
   const el=document.getElementById("sectors");
   document.getElementById("uncal").classList.toggle("show", !calibrated);
+  const pw=document.getElementById("placeWarn");
+  pw.innerHTML = unresolvedPlaces.length
+    ? `<div class="warnbar red"><b>${unresolvedPlaces.length} unrecognised place(s):</b> ${unresolvedPlaces.map(esc).join(", ")} — LogTen doesn't already know these. <button class="quiet" onclick="openResolve()">Resolve</button> before sending.</div>`
+    : "";
   if(!sectors.length){ el.innerHTML=""; document.getElementById("sumCard").style.display="none"; document.getElementById("actionbar").style.display="none"; return; }
   const pend=sectors.filter(s=>s.include&&!s.already);
   const tot=pend.reduce((a,s)=>a+(s.totalMin||0),0);
@@ -419,8 +453,9 @@ function render(){
   }).join("");
   const chunks=makeChunks().length;
   document.getElementById("actionbar").style.display=pend.length?"":"none";
-  document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)";
+  document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)"+(unresolvedPlaces.length?" · resolve places to send":"");
   document.getElementById("sendBtn").textContent = chunks>1? "Send batch 1 of "+chunks : "Send to LogTen";
+  document.getElementById("sendBtn").disabled = unresolvedPlaces.length>0;
   sendIdx=0;
 }
 function detailForm(s,i){
@@ -567,6 +602,40 @@ function saveAliases(){
   });
   aliases=out; localStorage.setItem(LS.alias, JSON.stringify(aliases));
   document.getElementById("aliasModal").classList.remove("open");
+  if(rawCSV&&rawXLSX) tryBuild();
+}
+
+/* ================= unrecognised place resolution ================= */
+function namedSiteOptions(){
+  const set=new Set(Object.values(aliases).filter(v=>v!=="KSS HEMS SITE" && !isICAO(v)));
+  return [...set].sort();
+}
+function openResolve(){
+  document.getElementById("siteOptions").innerHTML=namedSiteOptions().map(o=>`<option value="${esc(o)}">`).join("");
+  document.getElementById("resolveList").innerHTML=unresolvedPlaces.map(raw=>{
+    const key=raw.toLowerCase();
+    return `<div class="placerow" data-key="${esc(key)}" data-raw="${esc(raw)}">
+      <div class="pname">${esc(raw)}</div>
+      <label><input type="radio" name="c_${esc(key)}" value="HEMS">HEMS Site (KSS HEMS SITE)</label>
+      <label><input type="radio" name="c_${esc(key)}" value="NAMED">Named site: <input type="text" class="namedInput" list="siteOptions" placeholder="type or pick"></label>
+      <label><input type="radio" name="c_${esc(key)}" value="NEW">Create as new (${esc(raw.trim().toUpperCase())})</label>
+    </div>`;
+  }).join("");
+  document.getElementById("resolveModal").classList.add("open");
+}
+function saveResolutions(){
+  document.querySelectorAll("#resolveList .placerow").forEach(row=>{
+    const key=row.dataset.key, raw=row.dataset.raw;
+    const checked=row.querySelector("input[type=radio]:checked");
+    if(!checked) return;
+    let target;
+    if(checked.value==="HEMS") target="KSS HEMS SITE";
+    else if(checked.value==="NEW") target=raw.trim().toUpperCase();
+    else { const v=row.querySelector(".namedInput").value.trim(); if(!v) return; target=v.toUpperCase(); }
+    aliases[key]=target;
+  });
+  localStorage.setItem(LS.alias, JSON.stringify(aliases));
+  document.getElementById("resolveModal").classList.remove("open");
   if(rawCSV&&rawXLSX) tryBuild();
 }
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
