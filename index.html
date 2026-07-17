@@ -153,7 +153,7 @@
 <script>
 "use strict";
 /* ================= configuration & persistence ================= */
-const LS = { map:"sl_mapping", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
+const LS = { map:"sl_mapping2", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
                    dateFormat:"MM/dd/yyyy", dateAndTimeFormat:"MM/dd/yyyy HH:mm", timesAreZulu:true };
@@ -168,12 +168,12 @@ const DEFAULT_MAP = {
   "Offshore":     {kind:"time", slot:4},
   "Mountain":     {kind:"time", slot:5},
   "Sling":        {kind:"time", slot:6},
-  "3D":           {kind:"op",   slot:1},
-  "2D":           {kind:"op",   slot:2},
-  "IFR Sectors":  {kind:"op",   slot:3},
-  "NVIS Sectors": {kind:"op",   slot:4},
+  "3D":           {kind:"op",   slot:7},
+  "2D":           {kind:"op",   slot:17},
+  "IFR Sectors":  {kind:"op",   slot:1},
+  "NVIS Sectors": {kind:"op",   slot:8},
   "Platform T/O": {kind:"takeoff", slot:1},
-  "Platform Ldg": {kind:"landing", slot:1},
+  "Platform Ldg": {kind:"landing", slot:2},
 };
 const DEFAULT_ALIASES = {
   "redhill":"EGKR",
@@ -347,6 +347,7 @@ function tryBuild(){
       dayTO,dayLdg,nightTO,nightLdg,
       platTO:rk.platTO, platLdg:rk.platLdg,
       nvisSectors:rk.nvisSectors, nvgMin:rk.nvgMin, ifrSectors:rk.ifrSectors,
+      app3D:0, app2D:0,
       remarks,
       matched:!!x,
       include:!isSim,
@@ -421,7 +422,7 @@ function detailForm(s,i){
     ${F("Day T/O","dayTO",s.dayTO)}${F("Day Ldg","dayLdg",s.dayLdg)}
     ${F("Night T/O","nightTO",s.nightTO)}${F("Night Ldg","nightLdg",s.nightLdg)}
     ${F("Plat T/O","platTO",s.platTO)}${F("Plat Ldg","platLdg",s.platLdg)}
-    ${F("NVIS sectors","nvisSectors",s.nvisSectors)}${F("IFR sectors","ifrSectors",s.ifrSectors)}
+    ${F("NVIS sectors","nvisSectors",s.nvisSectors)}${F("IFR sectors","ifrSectors",s.ifrSectors)}${F("3D appr","app3D",s.app3D)}${F("2D appr","app2D",s.app2D)}
     <div class="fld wide"><label>Remarks</label><textarea onchange="upd(${i},'remarks',this.value)">${esc(s.remarks)}</textarea></div>
   </div>
   <div class="rowbtns">
@@ -434,7 +435,7 @@ function toggleCap(i){ sectors[i].capacity = sectors[i].capacity==="SIC" ? "P1u/
 function upd(i,prop,val){
   const s=sectors[i];
   if(["totalMin","nightMin","nvgMin","actInstMin"].includes(prop)) s[prop]=parseHM(val)??0;
-  else if(["dayTO","dayLdg","nightTO","nightLdg","platTO","platLdg","nvisSectors","ifrSectors"].includes(prop)) s[prop]=parseInt(val)||0;
+  else if(["dayTO","dayLdg","nightTO","nightLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;
   else s[prop]=val;
 }
 
@@ -474,6 +475,7 @@ function entityFor(s){
   put("Turbine",s.totalMin); put("Twin Turbine",s.totalMin);
   if(s.hems) put("HEMS",s.totalMin);
   put("NVIS Sectors",s.nvisSectors); put("IFR Sectors",s.ifrSectors);
+  put("3D",s.app3D); put("2D",s.app2D);
   put("Platform T/O",s.platTO); put("Platform Ldg",s.platLdg);
   return e;
 }
@@ -506,7 +508,7 @@ function sendCalibration(){
     flight_flightDate:"01/01/2028", flight_from:"ZZZZ", flight_to:"ZZZZ",
     flight_totalTime:"1:00", flight_selectedAircraftType:"AW169", flight_selectedAircraftID:"CAL-1",
     flight_remarks:"SECTOR LOG CALIBRATION FLIGHT - custom time slot n = 0:0n-style value, ops/takeoffs/landings slot n = n. Note which of YOUR named fields shows which value, set the map, then delete this flight." };
-  for(let n=1;n<=20;n++){ e["flight_customTime"+n]=hm(n); e["flight_customOp"+n]=n; }
+  for(let n=1;n<=20;n++){ e["flight_customTime"+n]=n+":00"; e["flight_customOp"+n]=n; }
   for(let n=1;n<=10;n++){ e["flight_customTakeoff"+n]=n; e["flight_customLanding"+n]=n; e["flight_customNote"+n]="NOTE "+n; }
   const pkg={metadata:APP_META, entities:[e]};
   location.href="logten://v2/addEntities?package="+encodeURIComponent(JSON.stringify(pkg));
