@@ -199,6 +199,8 @@ function fmtDT(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d
 function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear(); }
 function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
 function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/.test(String(s||"").trim()); }
+const HELIPAD_KEYWORDS = ["KINGS COLLEGE","ST GEORGE","ROYAL SUSSEX","ROYAL BRIGHTON"];
+function isHelipad(place){ const P=String(place||"").toUpperCase(); return HELIPAD_KEYWORDS.some(k=>P.includes(k)); }
 function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 /* ================= file intake ================= */
@@ -330,11 +332,15 @@ function tryBuild(){
     // are junk (always 1/1) and an absent line means the other pilot handled it — log zero.
     const dayTO=rk.dayTO||0, dayLdg=rk.dayLdg||0, nightTO=rk.nightTO||0, nightLdg=rk.nightLdg||0;
 
-    const grids=[from.grid, to.grid, routeGrid].filter((g,i,a)=>g&&a.indexOf(g)===i);
+    const platTO = isHelipad(from.place) ? 1 : 0;
+    const platLdg = isHelipad(to.place) ? 1 : 0;
+    const grids=[from.grid, to.grid].filter((g,i,a)=>g&&a.indexOf(g)===i);
     const segs=[];
     if(grids.length) segs.push("KSS HEMS SITE - "+grids.join(" - "));
+    else if(/^(EGKR|REDHILL)$/i.test(from.place) && /^(EGKR|REDHILL)$/i.test(to.place)) segs.push("KSS HEMS STANDDOWN");
+    else if(/^(EGKR|REDHILL)$/i.test(to.place)) segs.push("KSS HEMS RTB");
     segs.push(...rk.free);
-    const remarks="GAMA - "+segs.join(" | ");
+    const remarks = segs.length ? "GAMA - "+segs.join(" | ") : "GAMA";
 
     sectors.push({
       key:"HCM-"+String(c["Flight #"]).trim(),
@@ -349,7 +355,7 @@ function tryBuild(){
       training,
       commander,
       dayTO,dayLdg,nightTO,nightLdg,
-      platTO:rk.platTO, platLdg:rk.platLdg,
+      platTO, platLdg,
       nvisSectors:rk.nvisSectors, nvgMin:rk.nvgMin, ifrSectors:rk.ifrSectors,
       app3D:0, app2D:0,
       remarks,
