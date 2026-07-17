@@ -85,6 +85,7 @@
   .placerow .pname{font-weight:600;margin-bottom:6px}
   .placerow label{display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px}
   .placerow .namedInput{flex:1;font:13px var(--mono);padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+  .placerow .newnote{font-size:12px;color:var(--amber);background:var(--amber-soft);border:1px solid #e3c98f;border-radius:6px;padding:6px 8px;margin-top:4px}
   .empty{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:14px}
   .uncal{font-size:12px;background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:6px;padding:6px 9px;margin-bottom:10px;display:none}
   .uncal.show{display:block}
@@ -120,6 +121,7 @@
 
   <div id="warnings"></div>
   <div id="placeWarn"></div>
+  <div id="aircraftWarn"></div>
   <div id="sectors"></div>
 </main>
 
@@ -166,10 +168,20 @@
   </div>
 </div></div>
 
+<!-- Unknown aircraft resolution modal -->
+<div class="modal" id="aircraftModal"><div class="mbox">
+  <h3>Unknown aircraft</h3>
+  <p>These registrations aren't confirmed on this device. Add each as a new aircraft (remembered next time) or exclude it (e.g. a simulator or foreign reg). The app never modifies aircraft already in LogTen and sends no data beyond the reg and type.</p>
+  <div id="aircraftList"></div>
+  <div class="rowbtns">
+    <button class="primary" onclick="saveAircraft()">Save & rebuild</button>
+  </div>
+</div></div>
+
 <script>
 "use strict";
 /* ================= configuration & persistence ================= */
-const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated" };
+const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
                    dateFormat:"MM/dd/yyyy", dateAndTimeFormat:"MM/dd/yyyy HH:mm", timesAreZulu:true };
@@ -201,10 +213,33 @@ const DEFAULT_ALIASES = {
   "se01 william harvey hospital ashford":"WILLIAM HARVEY HOSPITAL",
   "lkch ruskin park":"KINGS COLLEGE HOSPITAL LONDON",
 };
+// Known sites: reference for recognition, resolver options, and rooftop/scene flags.
+// NO coordinates are stored or sent — the app only references places by name and writes grids into remarks.
+// rooftop: elevated helipad -> gets a Platform T/O or Ldg. scene: the generic KSS HEMS SITE identifier.
+const KNOWN_SITES = [
+  { id:"EGKR", variants:["Redhill","Redhill Aerodrome"], rooftop:false, scene:false },
+  { id:"EGTO", variants:["Rochester","Rochester Airport - KSS HQ"], rooftop:false, scene:false },
+  { id:"EGKA", variants:["Shoreham","EGKA - Shoreham OOH"], rooftop:false, scene:false },
+  { id:"EGKB", variants:["Biggin Hill"], rooftop:false, scene:false },
+  { id:"EGMD", variants:["Lydd"], rooftop:false, scene:false },
+  { id:"KINGS COLLEGE HOSPITAL LONDON", variants:["Kings College Hospital","L01 Kings Collage Hospital London"], rooftop:true, scene:false },
+  { id:"ST GEORGE'S HOSPITAL", variants:[], rooftop:true, scene:false },
+  { id:"WILLIAM HARVEY HOSPITAL", variants:["William Harvey","SE01 William Harvey Hospital Ashford"], rooftop:true, scene:false },
+  { id:"QUEEN ALEXANDRA HOSPITAL", variants:[], rooftop:true, scene:false },
+  { id:"FRIMLEY PARK HOSPITAL", variants:[], rooftop:true, scene:false },
+  { id:"ROYAL SUSSEX HOSPITAL SECONDARY", variants:["SE02A Royal Sussex - Alternate","East Brighton Park"], rooftop:false, scene:false },
+  { id:"LKCH RUSKIN PARK", variants:["Ruskin Park","L01A Ruskin Park"], rooftop:false, scene:false },
+  { id:"KSS HEMS SITE", variants:[], rooftop:false, scene:true },
+];
+// Registrations already confirmed in the logbook on a fresh install. G-MGPS is intentionally
+// absent — a real KSS AW169 not yet in the logbook — so it surfaces in the aircraft resolver.
+const DEFAULT_AIRCRAFT = { "G-KSST":"AW169", "G-KSSC":"AW169", "G-LNAC":"AW169" };
 let mapping  = JSON.parse(localStorage.getItem(LS.map)   || "null") || structuredClone(DEFAULT_MAP);
 let aliases  = JSON.parse(localStorage.getItem(LS.alias) || "null") || structuredClone(DEFAULT_ALIASES);
 let imported = new Set(JSON.parse(localStorage.getItem(LS.imported) || "[]"));
 let calibrated = localStorage.getItem(LS.cal) === "1";
+let aircraft = JSON.parse(localStorage.getItem(LS.aircraft) || "null") || structuredClone(DEFAULT_AIRCRAFT);
+let excludedRegs = new Set(JSON.parse(localStorage.getItem(LS.excluded) || "[]"));
 
 /* ================= small utils ================= */
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
@@ -216,19 +251,25 @@ function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.
 function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
 function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/.test(String(s||"").trim()); }
 function isICAO(s){ return /^[A-Z]{4}$/i.test(String(s||"").trim()); }
+function normId(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+// Match a raw HCM name or a resolved place id against the known-sites list (id or any variant).
+function siteMatch(name){ const n=normId(name); if(!n) return null;
+  return KNOWN_SITES.find(s=> normId(s.id)===n || s.variants.some(v=>normId(v)===n)) || null; }
+function isKnownSiteId(v){ const n=normId(v);
+  return KNOWN_SITES.some(s=>normId(s.id)===n) || Object.values(aliases).some(x=>normId(x)===n); }
 function isKnownPlace(raw){
   const t=String(raw||"").trim();
   if(!t) return true; // blank is a separate warning (CHECK FROM/TO), not an unrecognised name
   if(isGrid(t)) return true;
-  if(isICAO(t)) return true;
-  return !!aliases[t.toLowerCase()];
+  if(isICAO(t)) return true;                 // LogTen knows ICAO airfields natively
+  if(aliases[t.toLowerCase()]) return true;  // user-saved resolution
+  if(siteMatch(t)) return true;              // known-site name variant
+  return false;
 }
-const HELIPAD_KEYWORDS = ["KINGS COLLEGE","ST GEORGE","ROYAL SUSSEX","ROYAL BRIGHTON"];
-function isHelipad(place){ const P=String(place||"").toUpperCase(); return HELIPAD_KEYWORDS.some(k=>P.includes(k)); }
 function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 /* ================= file intake ================= */
-let rawCSV=null, rawXLSX=null, sectors=[], unresolvedPlaces=[];
+let rawCSV=null, rawXLSX=null, sectors=[], unresolvedPlaces=[], unresolvedAircraft=[];
 function fileIn(inp, kind){
   const f=inp.files[0]; if(!f) return;
   const r=new FileReader();
@@ -293,10 +334,16 @@ function parseRemarks(raw, sectorNightMin, totalMin){
 }
 function aliasPlace(name){
   const t=String(name||"").trim();
-  if(!t) return {place:"", grid:null, blank:true};
-  if(isGrid(t)) return {place:"KSS HEMS SITE", grid:t.replace(/\s/g,""), blank:false};
-  const a=aliases[t.toLowerCase()];
-  return {place:a||t.toUpperCase(), grid:null, blank:false};
+  if(!t) return {place:"", grid:null, blank:true, scene:false, rooftop:false};
+  if(isGrid(t)) return {place:"KSS HEMS SITE", grid:t.replace(/\s/g,""), blank:false, scene:true, rooftop:false};
+  // Resolution order: user-saved alias, then known-site variant, then the name as-is (uppercased).
+  let placeId = aliases[t.toLowerCase()];
+  if(!placeId){ const s=siteMatch(t); if(s) placeId=s.id; }
+  if(!placeId) placeId = t.toUpperCase();
+  const site=siteMatch(placeId);
+  return { place:placeId, grid:null, blank:false,
+           scene: (site? site.scene : false) || normId(placeId)===normId("KSS HEMS SITE"),
+           rooftop: site? site.rooftop : false };
 }
 
 /* ================= build sectors ================= */
@@ -309,7 +356,7 @@ function tryBuild(){
     const k=String(r[0]).trim()+"|"+hm(parseHM(r[3]))+"|"+hm(parseHM(r[6]));
     xIdx[k]=r;
   }
-  sectors=[]; let unmatched=0, simRows=0; const unresolvedMap=new Map();
+  sectors=[]; let unmatched=0, excludedRows=0; const unresolvedMap=new Map(), unresolvedAcMap=new Map();
   for(const c of rawCSV){
     if(!c["Date"]||String(c["Aircraft ID"]).trim()==="AIRMAESTRO") continue;
     const reg=String(c["Aircraft ID"]).trim();
@@ -317,9 +364,14 @@ function tryBuild(){
     const x=xIdx[key];
     const date=parseDate(c["Date"]);
     let totalMin=parseHM(c["Total Time"]);
-    const isSim = !AW169_REGS[reg];
-    if(isSim) simRows++;
-    if(!x && !isSim) unmatched++;
+    // Aircraft: never assume a reg is already in LogTen. Known -> import; excluded -> skip; else surface.
+    const acType = aircraft[reg];
+    const acExcluded = excludedRegs.has(reg);
+    const acUnresolved = !!reg && !acType && !acExcluded;
+    if(acUnresolved && !unresolvedAcMap.has(reg)) unresolvedAcMap.set(reg, reg);
+    const sim = acExcluded; // excluded regs (sim/foreign) are logged manually, not imported
+    if(sim) excludedRows++;
+    if(!x && !sim && !acUnresolved) unmatched++;
 
     // Zulu datetimes. xlsx: [2]=depZ [3]=depL [5]=arrZ [6]=arrL. CSV Out/Off/On/In are LOCAL.
     const depZ=x?parseHM(x[2]):null, depL=x?parseHM(x[3]):parseHM(c["Out"]);
@@ -361,9 +413,17 @@ function tryBuild(){
     // are junk (always 1/1) and an absent line means the other pilot handled it — log zero.
     const dayTO=rk.dayTO||0, dayLdg=rk.dayLdg||0, nightTO=rk.nightTO||0, nightLdg=rk.nightLdg||0;
 
-    const platTO = isHelipad(from.place) ? 1 : 0;
-    const platLdg = isHelipad(to.place) ? 1 : 0;
-    const grids=[from.grid, to.grid].filter((g,i,a)=>g&&a.indexOf(g)===i);
+    // Platform T/O & Ldg: rooftop flag comes from the known-sites list, not name keywords.
+    const platTO = from.rooftop ? 1 : 0;
+    const platLdg = to.rooftop ? 1 : 0;
+    // Scene grids into remarks. From/To grids (arrived as grid) always belong to that scene.
+    // The Route/HLS column holds the ARRIVAL endpoint's grid — only wanted when the arrival is a
+    // HEMS scene without its own grid; for a hospital/airfield it's that site's grid, which we drop.
+    const sceneGrids=[];
+    if(from.grid) sceneGrids.push(from.grid);
+    if(to.grid) sceneGrids.push(to.grid);
+    if(routeGrid && to.scene && !to.grid) sceneGrids.push(routeGrid);
+    const grids=sceneGrids.filter((g,i,a)=>g&&a.indexOf(g)===i);
     const segs=[];
     if(grids.length) segs.push("KSS HEMS SITE - "+grids.join(" - "));
     else if(/^(EGKR|REDHILL)$/i.test(from.place) && /^(EGKR|REDHILL)$/i.test(to.place)) segs.push("KSS HEMS STANDDOWN");
@@ -374,13 +434,13 @@ function tryBuild(){
     sectors.push({
       key:"HCM-"+String(c["Flight #"]).trim(),
       date, dateStr:String(c["Date"]).trim(),
-      reg, type:AW169_REGS[reg]||"", sim:isSim,
+      reg, type:acType||AW169_REGS[reg]||"AW169", sim, regUnresolved:acUnresolved,
       from:from.place, to:to.place, blankPlaces:from.blank||to.blank,
       outZ,offZ,onZ,inZ, totalMin, nightMin, rotorAdj,
       ifrMin:parseHM(x?x[17]:c["IFR"])||0,
       actInstMin:rk.actInstMin,
       capacity:"SIC",            // default per Ed; toggle to P1u/s per sector
-      hems: !training && !isSim, // HEMS time = total unless training/sim
+      hems: !training && !sim,   // HEMS time = total unless training/excluded
       training,
       commander,
       dayTO,dayLdg,nightTO,nightLdg,
@@ -389,16 +449,17 @@ function tryBuild(){
       app3D:0, app2D:0,
       remarks,
       matched:!!x,
-      include:!isSim,
+      include:!!acType,          // only confirmed-known aircraft are imported
       already:imported.has("HCM-"+String(c["Flight #"]).trim()),
     });
   }
   sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
   unresolvedPlaces=[...unresolvedMap.values()];
+  unresolvedAircraft=[...unresolvedAcMap.values()];
   msg.textContent="";
   const warn=[];
   if(unmatched) warn.push(unmatched+" sector(s) could not be matched between the two files — check their times before sending.");
-  if(simRows) warn.push(simRows+" simulator/unknown-registration row(s) (e.g. CP-818) are excluded by default — log sim details manually or include and edit.");
+  if(excludedRows) warn.push(excludedRows+" excluded aircraft row(s) won't be imported — log those manually.");
   document.getElementById("warnings").innerHTML=warn.map(w=>`<div class="warnbar">${esc(w)}</div>`).join("");
   render();
 }
@@ -410,6 +471,9 @@ function render(){
   const pw=document.getElementById("placeWarn");
   pw.innerHTML = unresolvedPlaces.length
     ? `<div class="warnbar red"><b>${unresolvedPlaces.length} unrecognised place(s):</b> ${unresolvedPlaces.map(esc).join(", ")} — LogTen doesn't already know these. <button class="quiet" onclick="openResolve()">Resolve</button> before sending.</div>`
+    : "";
+  document.getElementById("aircraftWarn").innerHTML = unresolvedAircraft.length
+    ? `<div class="warnbar red"><b>${unresolvedAircraft.length} unknown aircraft:</b> ${unresolvedAircraft.map(esc).join(", ")} — not confirmed on this device. <button class="quiet" onclick="openAircraft()">Resolve aircraft</button> before sending.</div>`
     : "";
   if(!sectors.length){ el.innerHTML=""; document.getElementById("sumCard").style.display="none"; document.getElementById("actionbar").style.display="none"; return; }
   const pend=sectors.filter(s=>s.include&&!s.already);
@@ -432,8 +496,9 @@ function render(){
     if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
     if(s.hems) chips.push(`<span class="chip">HEMS</span>`);
     if(s.training) chips.push(`<span class="chip warn">TRAINING</span>`);
-    if(s.sim) chips.push(`<span class="chip warn">SIM/UNKNOWN REG</span>`);
-    if(!s.matched&&!s.sim) chips.push(`<span class="chip warn">UNMATCHED</span>`);
+    if(s.regUnresolved) chips.push(`<span class="chip warn">UNKNOWN AIRCRAFT</span>`);
+    if(s.sim) chips.push(`<span class="chip warn">EXCLUDED</span>`);
+    if(!s.matched&&!s.sim&&!s.regUnresolved) chips.push(`<span class="chip warn">UNMATCHED</span>`);
     if(s.blankPlaces) chips.push(`<span class="chip warn">CHECK FROM/TO</span>`);
     return `<div class="sector ${s.include?"":"excluded"} ${s.already?"imported":""}" id="sec${i}">
       <div class="srow" onclick="toggleOpen(${i})">
@@ -453,9 +518,10 @@ function render(){
   }).join("");
   const chunks=makeChunks().length;
   document.getElementById("actionbar").style.display=pend.length?"":"none";
-  document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)"+(unresolvedPlaces.length?" · resolve places to send":"");
+  const blocked = unresolvedPlaces.length>0 || unresolvedAircraft.length>0;
+  document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)"+(blocked?" · resolve before sending":"");
   document.getElementById("sendBtn").textContent = chunks>1? "Send batch 1 of "+chunks : "Send to LogTen";
-  document.getElementById("sendBtn").disabled = unresolvedPlaces.length>0;
+  document.getElementById("sendBtn").disabled = blocked;
   sendIdx=0;
 }
 function detailForm(s,i){
@@ -606,19 +672,34 @@ function saveAliases(){
 }
 
 /* ================= unrecognised place resolution ================= */
+// All sites offerable in the resolver: every known airfield/hospital/named site (not the generic
+// scene), plus any named sites the user has previously resolved to.
 function namedSiteOptions(){
-  const set=new Set(Object.values(aliases).filter(v=>v!=="KSS HEMS SITE" && !isICAO(v)));
+  const set=new Set();
+  KNOWN_SITES.forEach(s=>{ if(!s.scene) set.add(s.id); });
+  Object.values(aliases).forEach(v=>{ if(v && v!=="KSS HEMS SITE") set.add(v); });
   return [...set].sort();
+}
+function resolveRowNote(row){
+  const checked=row.querySelector("input[type=radio]:checked");
+  const note=row.querySelector(".newnote");
+  let isNew=false;
+  if(checked){
+    if(checked.value==="NEW") isNew=true;
+    else if(checked.value==="NAMED"){ const v=row.querySelector(".namedInput").value.trim(); isNew = !!v && !isKnownSiteId(v); }
+  }
+  note.style.display=isNew?"block":"none";
 }
 function openResolve(){
   document.getElementById("siteOptions").innerHTML=namedSiteOptions().map(o=>`<option value="${esc(o)}">`).join("");
   document.getElementById("resolveList").innerHTML=unresolvedPlaces.map(raw=>{
     const key=raw.toLowerCase();
-    return `<div class="placerow" data-key="${esc(key)}" data-raw="${esc(raw)}">
+    return `<div class="placerow" data-key="${esc(key)}" data-raw="${esc(raw)}" onchange="resolveRowNote(this)" oninput="resolveRowNote(this)">
       <div class="pname">${esc(raw)}</div>
       <label><input type="radio" name="c_${esc(key)}" value="HEMS">HEMS Site (KSS HEMS SITE)</label>
-      <label><input type="radio" name="c_${esc(key)}" value="NAMED">Named site: <input type="text" class="namedInput" list="siteOptions" placeholder="type or pick"></label>
+      <label><input type="radio" name="c_${esc(key)}" value="NAMED">Named site: <input type="text" class="namedInput" list="siteOptions" placeholder="type or pick a known site"></label>
       <label><input type="radio" name="c_${esc(key)}" value="NEW">Create as new (${esc(raw.trim().toUpperCase())})</label>
+      <div class="newnote" style="display:none">New place — you'll need to position it manually in LogTen. No coordinates are sent.</div>
     </div>`;
   }).join("");
   document.getElementById("resolveModal").classList.add("open");
@@ -636,6 +717,32 @@ function saveResolutions(){
   });
   localStorage.setItem(LS.alias, JSON.stringify(aliases));
   document.getElementById("resolveModal").classList.remove("open");
+  if(rawCSV&&rawXLSX) tryBuild();
+}
+
+/* ================= unknown aircraft resolution ================= */
+function openAircraft(){
+  document.getElementById("aircraftList").innerHTML=unresolvedAircraft.map(reg=>{
+    const def=AW169_REGS[reg]||"AW169";
+    return `<div class="placerow" data-reg="${esc(reg)}">
+      <div class="pname">${esc(reg)}</div>
+      <label><input type="radio" name="a_${esc(reg)}" value="ADD" checked>Add as new aircraft — type <input type="text" class="namedInput typeInput" value="${esc(def)}" style="max-width:130px"></label>
+      <label><input type="radio" name="a_${esc(reg)}" value="EXCLUDE">Exclude (simulator / foreign reg — don't import)</label>
+    </div>`;
+  }).join("");
+  document.getElementById("aircraftModal").classList.add("open");
+}
+function saveAircraft(){
+  document.querySelectorAll("#aircraftList .placerow").forEach(row=>{
+    const reg=row.dataset.reg;
+    const checked=row.querySelector("input[type=radio]:checked");
+    if(!checked) return;
+    if(checked.value==="ADD"){ const t=row.querySelector(".typeInput").value.trim()||"AW169"; aircraft[reg]=t; excludedRegs.delete(reg); }
+    else { excludedRegs.add(reg); delete aircraft[reg]; }
+  });
+  localStorage.setItem(LS.aircraft, JSON.stringify(aircraft));
+  localStorage.setItem(LS.excluded, JSON.stringify([...excludedRegs]));
+  document.getElementById("aircraftModal").classList.remove("open");
   if(rawCSV&&rawXLSX) tryBuild();
 }
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
