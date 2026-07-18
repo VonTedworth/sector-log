@@ -86,6 +86,9 @@
   .placerow label{display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px}
   .placerow .namedInput{flex:1;font:13px var(--mono);padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
   .placerow .newnote{font-size:12px;color:var(--amber);background:var(--amber-soft);border:1px solid #e3c98f;border-radius:6px;padding:6px 8px;margin-top:4px}
+  .placerow .roofrow{display:flex;align-items:center;gap:6px;margin-top:6px;color:var(--ink);font-weight:600}
+  .usersiterow{grid-template-columns:1fr auto 30px}
+  .usersiterow .roofcell{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-soft);white-space:nowrap;font-family:-apple-system,sans-serif}
   .empty{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:14px}
   .uncal{font-size:12px;background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:6px;padding:6px 9px;margin-bottom:10px;display:none}
   .uncal.show{display:block}
@@ -158,6 +161,12 @@
   <div id="aliasList"></div>
   <div class="rowbtns">
     <button class="quiet" onclick="addAlias('','')">Add row</button>
+  </div>
+  <h3 style="margin-top:16px">Your added sites</h3>
+  <p>Sites you created while resolving. Toggle elevated helipad to control Platform T/O &amp; Ldg; delete to be asked again next time. These reference LogTen by name only — no places are created and no coordinates are sent.</p>
+  <div id="userSiteList"></div>
+  <div class="rowbtns">
+    <button class="quiet" onclick="userSiteRow(null)">Add site</button>
     <button class="primary" onclick="saveAliases()">Save & close</button>
   </div>
 </div></div>
@@ -187,8 +196,8 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:10, date:"2026-07-18" };
-const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded" };
+const BUILD = { n:11, date:"2026-07-18" };
+const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
                    dateFormat:"MM/dd/yyyy", dateAndTimeFormat:"MM/dd/yyyy HH:mm", timesAreZulu:true };
@@ -234,6 +243,9 @@ const KNOWN_SITES = [
   { id:"WILLIAM HARVEY HOSPITAL", variants:["William Harvey","SE01 William Harvey Hospital Ashford"], rooftop:true, scene:false },
   { id:"QUEEN ALEXANDRA HOSPITAL", variants:[], rooftop:true, scene:false },
   { id:"FRIMLEY PARK HOSPITAL", variants:[], rooftop:true, scene:false },
+  // Brighton main hospital — rooftop helipad. `avoid` keeps Secondary/Alternate/East Brighton Park
+  // names off the main so they resolve to the ground-level Secondary entry below.
+  { id:"SE02 BRIGHTON ROYAL SUSSEX HOSPITAL", variants:["SE02 Brighton Royal Sussex Hospital","Brighton Royal Sussex Hospital","Royal Sussex Hospital","RSCH"], rooftop:true, scene:false, avoid:["ALTERNATE","SECONDARY","SECONDRY","EASTBRIGHTONPARK"] },
   { id:"ROYAL SUSSEX HOSPITAL SECONDARY", variants:["SE02A Royal Sussex - Alternate","East Brighton Park"], rooftop:false, scene:false },
   { id:"LKCH RUSKIN PARK", variants:["Ruskin Park","L01A Ruskin Park"], rooftop:false, scene:false },
   { id:"KSS HEMS SITE", variants:[], rooftop:false, scene:true },
@@ -247,6 +259,8 @@ let imported = new Set(JSON.parse(localStorage.getItem(LS.imported) || "[]"));
 let calibrated = localStorage.getItem(LS.cal) === "1";
 let aircraft = JSON.parse(localStorage.getItem(LS.aircraft) || "null") || structuredClone(DEFAULT_AIRCRAFT);
 let excludedRegs = new Set(JSON.parse(localStorage.getItem(LS.excluded) || "[]"));
+// Sites the user created while resolving. Same shape as KNOWN_SITES (id, variants, rooftop, scene:false).
+let userSites = JSON.parse(localStorage.getItem(LS.usersites) || "[]");
 
 /* ================= small utils ================= */
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
@@ -269,11 +283,17 @@ function cleanSceneName(raw){
   return t;
 }
 function sceneKey(raw){ return normId(cleanSceneName(raw)); }
-// Match a raw HCM name or a resolved place id against the known-sites list (id or any variant).
-function siteMatch(name){ const n=normId(name); if(!n) return null;
-  return KNOWN_SITES.find(s=> normId(s.id)===n || s.variants.some(v=>normId(v)===n)) || null; }
-function isKnownSiteId(v){ const n=normId(v);
-  return KNOWN_SITES.some(s=>normId(s.id)===n) || Object.values(aliases).some(x=>normId(x)===n); }
+// Coded-in sites plus the user's own added sites — user sites behave exactly like KNOWN_SITES.
+function allSites(){ return KNOWN_SITES.concat(userSites); }
+// Match a raw HCM name or a resolved place id against a site (id or any variant), case-, punctuation-
+// and operational-suffix tolerant (Bagshot / Bagshot HOS). `avoid` tokens block a match (keeps the
+// Brighton main off Secondary/Alternate names). Still strict otherwise — Ashford never hits Ashfield.
+function siteMatch(name){ const n=normId(name), k=sceneKey(name); if(!n) return null;
+  return allSites().find(s=>{
+    if(s.avoid && s.avoid.some(a=>n.includes(a))) return false;
+    return [s.id, ...s.variants].some(v=> normId(v)===n || sceneKey(v)===k);
+  }) || null; }
+function isKnownSiteId(v){ return !!siteMatch(v) || Object.values(aliases).some(x=>normId(x)===normId(v)); }
 function isKnownPlace(raw){
   const t=String(raw||"").trim();
   if(!t) return true; // blank is a separate warning (CHECK FROM/TO), not an unrecognised name
@@ -718,12 +738,22 @@ function saveMapping(){
 function openAliases(){
   const box=document.getElementById("aliasList"); box.innerHTML="";
   Object.entries(aliases).forEach(([k,v])=>addAlias(k,v));
+  const ub=document.getElementById("userSiteList"); ub.innerHTML="";
+  userSites.forEach(s=>userSiteRow(s));
   document.getElementById("aliasModal").classList.add("open");
 }
 function addAlias(k,v){
   const box=document.getElementById("aliasList");
   const row=document.createElement("div"); row.className="aliasrow";
   row.innerHTML=`<input placeholder="HCM name" value="${esc(k)}"><span>→</span><input placeholder="LogTen name" value="${esc(v)}"><button class="del" onclick="this.parentElement.remove()">×</button>`;
+  box.appendChild(row);
+}
+function userSiteRow(s){
+  const box=document.getElementById("userSiteList");
+  const row=document.createElement("div"); row.className="aliasrow usersiterow"; row.dataset.id=s?s.id:"";
+  row.innerHTML=`<input class="usName" placeholder="Site name" value="${esc(s?s.id:"")}">
+    <label class="roofcell"><input type="checkbox" class="usRoof" ${s&&s.rooftop?"checked":""}> elevated helipad</label>
+    <button class="del" onclick="this.parentElement.remove()">×</button>`;
   box.appendChild(row);
 }
 function saveAliases(){
@@ -733,6 +763,17 @@ function saveAliases(){
     if(a.value.trim()&&b.value.trim()) out[a.value.trim().toLowerCase()]=b.value.trim();
   });
   aliases=out; localStorage.setItem(LS.alias, JSON.stringify(aliases));
+  // User sites: update kept rows in place (preserving accumulated variants), add new, drop removed.
+  const keptIds=new Set();
+  document.querySelectorAll("#userSiteList .usersiterow").forEach(r=>{
+    const origId=r.dataset.id||"", name=r.querySelector(".usName").value.trim(), roof=r.querySelector(".usRoof").checked;
+    if(!name) return;
+    let s=userSites.find(u=>u.id===origId) || userSites.find(u=>normId(u.id)===normId(name));
+    if(s){ if(normId(s.id)!==normId(name)){ if(!s.variants.some(v=>normId(v)===normId(name))) s.variants.push(name); s.id=name.toUpperCase(); } s.rooftop=roof; keptIds.add(s.id); }
+    else { const ns={id:name.toUpperCase(), variants:[name], rooftop:roof, scene:false}; userSites.push(ns); keptIds.add(ns.id); }
+  });
+  userSites=userSites.filter(u=>keptIds.has(u.id));
+  persistUserSites();
   document.getElementById("aliasModal").classList.remove("open");
   if(rawCSV&&rawXLSX) tryBuild();
 }
@@ -742,7 +783,7 @@ function saveAliases(){
 // scene), plus any named sites the user has previously resolved to.
 function namedSiteOptions(){
   const set=new Set();
-  KNOWN_SITES.forEach(s=>{ if(!s.scene) set.add(s.id); });
+  allSites().forEach(s=>{ if(!s.scene) set.add(s.id); });
   Object.values(aliases).forEach(v=>{ if(v && v!=="KSS HEMS SITE") set.add(v); });
   return [...set].sort();
 }
@@ -765,7 +806,9 @@ function openResolve(){
       <label><input type="radio" name="c_${esc(key)}" value="HEMS">HEMS Site (KSS HEMS SITE)</label>
       <label><input type="radio" name="c_${esc(key)}" value="NAMED">Named site: <input type="text" class="namedInput" list="siteOptions" placeholder="type or pick a known site"></label>
       <label><input type="radio" name="c_${esc(key)}" value="NEW">Create as new (${esc(raw.trim().toUpperCase())})</label>
-      <div class="newnote" style="display:none">New place — you'll need to position it manually in LogTen. No coordinates are sent.</div>
+      <div class="newnote" style="display:none">New place — you'll need to position it manually in LogTen. No coordinates are sent.
+        <label class="roofrow"><input type="checkbox" class="roofToggle"> Elevated helipad? (adds Platform T/O &amp; Ldg)</label>
+      </div>
     </div>`;
   }).join("");
   document.getElementById("resolveModal").classList.add("open");
@@ -775,16 +818,33 @@ function saveResolutions(){
     const key=row.dataset.key, raw=row.dataset.raw;
     const checked=row.querySelector("input[type=radio]:checked");
     if(!checked) return;
-    let target;
-    if(checked.value==="HEMS") target="KSS HEMS SITE";
-    else if(checked.value==="NEW") target=raw.trim().toUpperCase();
-    else { const v=row.querySelector(".namedInput").value.trim(); if(!v) return; target=v.toUpperCase(); }
-    aliases[key]=target;
+    if(checked.value==="HEMS"){ aliases[key]="KSS HEMS SITE"; return; }
+    const name = checked.value==="NEW" ? raw.trim() : row.querySelector(".namedInput").value.trim();
+    if(!name) return;
+    const existing = siteMatch(name);
+    if(existing){ aliases[key]=existing.scene ? "KSS HEMS SITE" : existing.id; return; }
+    // Brand-new named site: persist as a first-class user site (recognised by its name and the raw
+    // HCM name on future imports); the rooftop toggle drives Platform T/O & Ldg. No alias needed.
+    const roof = !!(row.querySelector(".roofToggle") && row.querySelector(".roofToggle").checked);
+    addOrUpdateUserSite(name, roof, raw);
+    delete aliases[key]; // recognition now comes from the user site, so it re-flags if the site is deleted
   });
+  persistUserSites();
   localStorage.setItem(LS.alias, JSON.stringify(aliases));
   document.getElementById("resolveModal").classList.remove("open");
   if(rawCSV&&rawXLSX) tryBuild();
 }
+// Create or update a user site. Both the chosen display name and the raw HCM name become variants so
+// future imports recognise either. Returns the site id.
+function addOrUpdateUserSite(displayName, rooftop, rawName){
+  const disp=String(displayName).trim(); const id=disp.toUpperCase();
+  const vars=[disp]; if(rawName && normId(rawName)!==normId(disp)) vars.push(String(rawName).trim());
+  let s=userSites.find(u=>normId(u.id)===normId(id));
+  if(s){ s.rooftop=!!rooftop; vars.forEach(v=>{ if(!s.variants.some(x=>normId(x)===normId(v))) s.variants.push(v); }); }
+  else userSites.push({ id, variants:vars, rooftop:!!rooftop, scene:false });
+  return id;
+}
+function persistUserSites(){ localStorage.setItem(LS.usersites, JSON.stringify(userSites)); }
 
 /* ================= unknown aircraft resolution ================= */
 function openAircraft(){
