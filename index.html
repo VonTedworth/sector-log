@@ -89,12 +89,16 @@
   .empty{text-align:center;color:var(--ink-soft);padding:30px 10px;font-size:14px}
   .uncal{font-size:12px;background:var(--amber-soft);border:1px solid #e3c98f;color:var(--amber);border-radius:6px;padding:6px 9px;margin-bottom:10px;display:none}
   .uncal.show{display:block}
+  .fld.gridmiss input{border-color:var(--red);background:var(--red-soft)}
+  .fld.gridmiss label{color:var(--red)}
+  header .build{font-size:11px;color:var(--ink-soft);font-family:var(--mono);align-self:center}
   @media(max-width:560px){.srow{grid-template-columns:70px 1fr auto}}
 </style>
 </head>
 <body>
 <header>
   <h1>Sector Log<small>HeliCrew Manager → LogTen</small></h1>
+  <div class="build" id="buildStamp"></div>
   <div class="hbtns">
     <button class="quiet" onclick="openMapping()">Field map</button>
     <button class="quiet" onclick="openAliases()">Places</button>
@@ -122,6 +126,7 @@
   <div id="warnings"></div>
   <div id="placeWarn"></div>
   <div id="aircraftWarn"></div>
+  <div id="gridWarn"></div>
   <div id="sectors"></div>
 </main>
 
@@ -181,6 +186,8 @@
 <script>
 "use strict";
 /* ================= configuration & persistence ================= */
+// Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
+const BUILD = { n:9, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
@@ -249,7 +256,8 @@ function parseDate(s){ const m=String(s).trim().match(/^(\d{1,2})-([A-Za-z]{3})-
 function fmtDT(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear()+" "+String(d.getUTCHours()).padStart(2,"0")+":"+String(d.getUTCMinutes()).padStart(2,"0"); }
 function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear(); }
 function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
-function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/.test(String(s||"").trim()); }
+function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/i.test(String(s||"").trim()); }
+function normGrid(s){ return isGrid(s) ? String(s).trim().toUpperCase().replace(/\s/g,"") : null; }
 function isICAO(s){ return /^[A-Z]{4}$/i.test(String(s||"").trim()); }
 function normId(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
 // Match a raw HCM name or a resolved place id against the known-sites list (id or any variant).
@@ -335,7 +343,7 @@ function parseRemarks(raw, sectorNightMin, totalMin){
 function aliasPlace(name){
   const t=String(name||"").trim();
   if(!t) return {place:"", grid:null, blank:true, scene:false, rooftop:false};
-  if(isGrid(t)) return {place:"KSS HEMS SITE", grid:t.replace(/\s/g,""), blank:false, scene:true, rooftop:false};
+  if(isGrid(t)) return {place:"KSS HEMS SITE", grid:normGrid(t), blank:false, scene:true, rooftop:false};
   // Resolution order: user-saved alias, then known-site variant, then the name as-is (uppercased).
   let placeId = aliases[t.toLowerCase()];
   if(!placeId){ const s=siteMatch(t); if(s) placeId=s.id; }
@@ -344,6 +352,17 @@ function aliasPlace(name){
   return { place:placeId, grid:null, blank:false,
            scene: (site? site.scene : false) || normId(placeId)===normId("KSS HEMS SITE"),
            rooftop: site? site.rooftop : false };
+}
+// Build a sector's remarks from its departure/arrival scene grids (departure first), falling back
+// to the STANDDOWN/RTB shorthands. Called after carry-forward, and again when a grid is edited.
+function buildRemarks(s){
+  const grids=[s.depGrid, s.arrGrid].filter((g,i,a)=>g&&a.indexOf(g)===i);
+  const segs=[];
+  if(grids.length) segs.push("KSS HEMS SITE - "+grids.join(" - "));
+  else if(/^(EGKR|REDHILL)$/i.test(s.from) && /^(EGKR|REDHILL)$/i.test(s.to)) segs.push("KSS HEMS STANDDOWN");
+  else if(/^(EGKR|REDHILL)$/i.test(s.to)) segs.push("KSS HEMS RTB");
+  segs.push(...(s.freeLines||[]));
+  return segs.length ? "GAMA - "+segs.join(" | ") : "GAMA";
 }
 
 /* ================= build sectors ================= */
@@ -407,7 +426,7 @@ function tryBuild(){
     });
     const from=aliasPlace(fromRaw);
     const to  =aliasPlace(toRaw);
-    const routeGrid = isGrid(c["Route"]) ? String(c["Route"]).trim() : null;
+    const routeGrid = normGrid(c["Route"]);
     const training = TRAINING_RX.test(String(c["Remarks"]||""));
     // T/O & landing counts come ONLY from the crew-entered remark lines. HCM's CSV columns
     // are junk (always 1/1) and an absent line means the other pilot handled it — log zero.
@@ -416,20 +435,14 @@ function tryBuild(){
     // Platform T/O & Ldg: rooftop flag comes from the known-sites list, not name keywords.
     const platTO = from.rooftop ? 1 : 0;
     const platLdg = to.rooftop ? 1 : 0;
-    // Scene grids into remarks. From/To grids (arrived as grid) always belong to that scene.
-    // The Route/HLS column holds the ARRIVAL endpoint's grid — only wanted when the arrival is a
+    // Scene grids. From/To grids (arrived as grid) belong directly to that endpoint's scene.
+    // The Route/HLS column holds only the ARRIVAL endpoint's grid — wanted when the arrival is a
     // HEMS scene without its own grid; for a hospital/airfield it's that site's grid, which we drop.
-    const sceneGrids=[];
-    if(from.grid) sceneGrids.push(from.grid);
-    if(to.grid) sceneGrids.push(to.grid);
-    if(routeGrid && to.scene && !to.grid) sceneGrids.push(routeGrid);
-    const grids=sceneGrids.filter((g,i,a)=>g&&a.indexOf(g)===i);
-    const segs=[];
-    if(grids.length) segs.push("KSS HEMS SITE - "+grids.join(" - "));
-    else if(/^(EGKR|REDHILL)$/i.test(from.place) && /^(EGKR|REDHILL)$/i.test(to.place)) segs.push("KSS HEMS STANDDOWN");
-    else if(/^(EGKR|REDHILL)$/i.test(to.place)) segs.push("KSS HEMS RTB");
-    segs.push(...rk.free);
-    const remarks = segs.length ? "GAMA - "+segs.join(" | ") : "GAMA";
+    // A departure scene has no grid of its own (Route is arrival-only); it is inferred after sorting
+    // by carrying forward the previous sector's arrival grid at the same-named scene. Remarks are
+    // built in the post-sort finalise pass once departure grids are known.
+    const depGrid = from.grid || null;
+    const arrGrid = to.grid ? to.grid : (to.scene ? routeGrid : null);
 
     sectors.push({
       key:"HCM-"+String(c["Flight #"]).trim(),
@@ -447,13 +460,31 @@ function tryBuild(){
       platTO, platLdg,
       nvisSectors:rk.nvisSectors, nvgMin:rk.nvgMin, ifrSectors:rk.ifrSectors,
       app3D:0, app2D:0,
-      remarks,
+      fromScene:from.scene, toScene:to.scene,
+      fromNameNorm:normId(fromRaw), toNameNorm:normId(toRaw),
+      depGrid, arrGrid, freeLines:rk.free,
+      remarks:"", sceneGridMissing:false, gridInferred:false,
       matched:!!x,
       include:!!acType,          // only confirmed-known aircraft are imported
       already:imported.has("HCM-"+String(c["Flight #"]).trim()),
     });
   }
   sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
+  // Carry scene grids forward: a departure scene with no grid of its own inherits the grid of the
+  // nearest earlier sector that arrived at the same-named scene (the aircraft takes off from where
+  // it landed). Names/grids are compared case- and format-insensitively. Then build remarks and
+  // flag any sector still left with a scene endpoint that has no grid.
+  for(let i=0;i<sectors.length;i++){
+    const s=sectors[i];
+    if(s.fromScene && !s.depGrid){
+      for(let j=i-1;j>=0;j--){
+        const p=sectors[j];
+        if(p.toScene && p.arrGrid && p.toNameNorm && p.toNameNorm===s.fromNameNorm){ s.depGrid=p.arrGrid; s.gridInferred=true; break; }
+      }
+    }
+    s.sceneGridMissing = (s.fromScene && !s.depGrid) || (s.toScene && !s.arrGrid);
+    s.remarks = buildRemarks(s);
+  }
   unresolvedPlaces=[...unresolvedMap.values()];
   unresolvedAircraft=[...unresolvedAcMap.values()];
   msg.textContent="";
@@ -475,6 +506,10 @@ function render(){
   document.getElementById("aircraftWarn").innerHTML = unresolvedAircraft.length
     ? `<div class="warnbar red"><b>${unresolvedAircraft.length} unknown aircraft:</b> ${unresolvedAircraft.map(esc).join(", ")} — not confirmed on this device. <button class="quiet" onclick="openAircraft()">Resolve aircraft</button> before sending.</div>`
     : "";
+  const missingGrid=sectors.filter(s=>s.include&&!s.already&&s.sceneGridMissing);
+  document.getElementById("gridWarn").innerHTML = missingGrid.length
+    ? `<div class="warnbar red"><b>${missingGrid.length} scene sector(s) missing a grid</b> — couldn't be inferred from the batch. Open each flagged sector and type the six-figure reference before sending; a scene must never reach LogTen without its grid.</div>`
+    : "";
   if(!sectors.length){ el.innerHTML=""; document.getElementById("sumCard").style.display="none"; document.getElementById("actionbar").style.display="none"; return; }
   const pend=sectors.filter(s=>s.include&&!s.already);
   const tot=pend.reduce((a,s)=>a+(s.totalMin||0),0);
@@ -494,6 +529,8 @@ function render(){
     if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
     if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
     if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
+    if(s.gridInferred) chips.push('<span class="chip">GRID←PREV</span>');
+    if(s.sceneGridMissing) chips.push('<span class="chip warn">SCENE GRID MISSING</span>');
     if(s.hems) chips.push(`<span class="chip">HEMS</span>`);
     if(s.training) chips.push(`<span class="chip warn">TRAINING</span>`);
     if(s.regUnresolved) chips.push(`<span class="chip warn">UNKNOWN AIRCRAFT</span>`);
@@ -518,7 +555,7 @@ function render(){
   }).join("");
   const chunks=makeChunks().length;
   document.getElementById("actionbar").style.display=pend.length?"":"none";
-  const blocked = unresolvedPlaces.length>0 || unresolvedAircraft.length>0;
+  const blocked = unresolvedPlaces.length>0 || unresolvedAircraft.length>0 || missingGrid.length>0;
   document.getElementById("abN").textContent=pend.length+" sector(s) · "+chunks+" link tap(s)"+(blocked?" · resolve before sending":"");
   document.getElementById("sendBtn").textContent = chunks>1? "Send batch 1 of "+chunks : "Send to LogTen";
   document.getElementById("sendBtn").disabled = blocked;
@@ -526,6 +563,11 @@ function render(){
 }
 function detailForm(s,i){
   const F=(label,prop,val)=>`<div class="fld"><label>${label}</label><input value="${esc(val)}" onchange="upd(${i},'${prop}',this.value)"></div>`;
+  // Scene-grid fields: rebuild remarks + flags live so the missing-grid warning clears on entry.
+  const G=(label,prop,val,missing)=>`<div class="fld${missing?" gridmiss":""}"><label>${label}${missing?" ⚠ needed":""}</label><input value="${esc(val||"")}" placeholder="e.g. TQ742543" onchange="upd(${i},'${prop}',this.value);render()"></div>`;
+  const sceneFlds =
+    (s.fromScene?G("Dep scene grid","depGrid",s.depGrid,s.fromScene&&!s.depGrid):"")+
+    (s.toScene?G("Arr scene grid","arrGrid",s.arrGrid,s.toScene&&!s.arrGrid):"");
   return `<div class="fgrid">
     ${F("From","from",s.from)}${F("To","to",s.to)}
     ${F("Commander","commander",s.commander)}
@@ -535,6 +577,7 @@ function detailForm(s,i){
     ${F("Night T/O","nightTO",s.nightTO)}${F("Night Ldg","nightLdg",s.nightLdg)}
     ${F("Plat T/O","platTO",s.platTO)}${F("Plat Ldg","platLdg",s.platLdg)}
     ${F("NVIS sectors","nvisSectors",s.nvisSectors)}${F("IFR sectors","ifrSectors",s.ifrSectors)}${F("3D appr","app3D",s.app3D)}${F("2D appr","app2D",s.app2D)}
+    ${sceneFlds}
     <div class="fld wide"><label>Remarks</label><textarea onchange="upd(${i},'remarks',this.value)">${esc(s.remarks)}</textarea></div>
   </div>
   <div class="rowbtns">
@@ -548,6 +591,11 @@ function upd(i,prop,val){
   const s=sectors[i];
   if(["totalMin","nightMin","nvgMin","actInstMin"].includes(prop)) s[prop]=parseHM(val)??0;
   else if(["dayTO","dayLdg","nightTO","nightLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;
+  else if(prop==="depGrid"||prop==="arrGrid"){ // normalise to uppercase; invalid stays unset (still flagged)
+    s[prop]=normGrid(val);
+    s.sceneGridMissing=(s.fromScene&&!s.depGrid)||(s.toScene&&!s.arrGrid);
+    s.remarks=buildRemarks(s);
+  }
   else s[prop]=val;
 }
 
@@ -746,6 +794,7 @@ function saveAircraft(){
   if(rawCSV&&rawXLSX) tryBuild();
 }
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
+document.getElementById("buildStamp").textContent="build "+BUILD.n+" · "+BUILD.date;
 </script>
 </body>
 </html>
