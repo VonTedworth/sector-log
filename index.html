@@ -196,7 +196,7 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:11, date:"2026-07-18" };
+const BUILD = { n:12, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
@@ -469,6 +469,13 @@ function tryBuild(){
     // Platform T/O & Ldg: rooftop flag comes from the known-sites list, not name keywords.
     const platTO = from.rooftop ? 1 : 0;
     const platLdg = to.rooftop ? 1 : 0;
+    // NVG takeoff/landing depends on the SITE, per endpoint: Redhill (EGKR) and HEMS scenes are NVG
+    // sites, so a night takeoff/landing there counts NVG too. Hospitals and other airfields are white
+    // light — night only, never NVG. Base counts come from the crew "Night" remark lines (night T/O,
+    // night Ldg); this only governs whether an NVG count rides along. All editable on review.
+    const isNvgSite = p => p.scene || normId(p.place)==="EGKR";
+    const nvgTO = isNvgSite(from) ? nightTO : 0;
+    const nvgLdg = isNvgSite(to) ? nightLdg : 0;
     // Scene grids. From/To grids (arrived as grid) belong directly to that endpoint's scene.
     // The Route/HLS column holds only the ARRIVAL endpoint's grid — wanted when the arrival is a
     // HEMS scene without its own grid; for a hospital/airfield it's that site's grid, which we drop.
@@ -495,7 +502,8 @@ function tryBuild(){
       training,
       commander,
       dayTO,dayLdg,nightTO,nightLdg,
-      platTO, platLdg,
+      nvgTO, nvgLdg,
+      platTO, platLdg, pax:null,
       nvisSectors:rk.nvisSectors, nvgMin:rk.nvgMin, ifrSectors:rk.ifrSectors,
       app3D:0, app2D:0,
       fromScene:from.scene, toScene:to.scene,
@@ -564,6 +572,8 @@ function render(){
     if(s.nvisSectors) chips.push(`<span class="chip on">NVIS×${s.nvisSectors} ${hm(s.nvgMin)}</span>`);
     if(s.platTO||s.platLdg) chips.push(`<span class="chip on">PLAT ${s.platTO}/${s.platLdg}</span>`);
     if(s.nightTO||s.nightLdg) chips.push(`<span class="chip on">N-T/O ${s.nightTO}/${s.nightLdg}</span>`);
+    if(s.nvgTO||s.nvgLdg) chips.push(`<span class="chip on">NVG ${s.nvgTO}/${s.nvgLdg}</span>`);
+    if(s.pax) chips.push(`<span class="chip on">PAX ${s.pax}</span>`);
     if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
     if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
     if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
@@ -613,8 +623,10 @@ function detailForm(s,i){
     ${F("NVG time","nvgMin",hm(s.nvgMin))}${F("Act inst","actInstMin",hm(s.actInstMin))}
     ${F("Day T/O","dayTO",s.dayTO)}${F("Day Ldg","dayLdg",s.dayLdg)}
     ${F("Night T/O","nightTO",s.nightTO)}${F("Night Ldg","nightLdg",s.nightLdg)}
+    ${F("NVG T/O","nvgTO",s.nvgTO)}${F("NVG Ldg","nvgLdg",s.nvgLdg)}
     ${F("Plat T/O","platTO",s.platTO)}${F("Plat Ldg","platLdg",s.platLdg)}
     ${F("NVIS sectors","nvisSectors",s.nvisSectors)}${F("IFR sectors","ifrSectors",s.ifrSectors)}${F("3D appr","app3D",s.app3D)}${F("2D appr","app2D",s.app2D)}
+    ${F("Pax","pax",s.pax??"")}
     ${sceneFlds}
     <div class="fld wide"><label>Remarks</label><textarea onchange="upd(${i},'remarks',this.value)">${esc(s.remarks)}</textarea></div>
   </div>
@@ -628,7 +640,8 @@ function toggleCap(i){ sectors[i].capacity = sectors[i].capacity==="SIC" ? "P1u/
 function upd(i,prop,val){
   const s=sectors[i];
   if(["totalMin","nightMin","nvgMin","actInstMin"].includes(prop)) s[prop]=parseHM(val)??0;
-  else if(["dayTO","dayLdg","nightTO","nightLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;
+  else if(prop==="pax"){ const n=parseInt(val); s.pax = Number.isFinite(n)&&n>0 ? n : null; } // blank/0 -> omit
+  else if(["dayTO","dayLdg","nightTO","nightLdg","nvgTO","nvgLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;
   else if(prop==="depGrid"||prop==="arrGrid"){ // normalise to uppercase; invalid stays unset (still flagged)
     s[prop]=normGrid(val);
     s.sceneGridMissing=(s.fromScene&&!s.depGrid)||(s.toScene&&!s.arrGrid);
@@ -667,8 +680,9 @@ function entityFor(s){
   if(s.dayLdg) e.flight_dayLandings=s.dayLdg;
   if(s.nightTO) e.flight_nightTakeoffs=s.nightTO;
   if(s.nightLdg) e.flight_nightLandings=s.nightLdg;
-  if(s.nvisSectors&&s.nightTO) e.flight_nightVisionGoggleTakeoffs=s.nightTO;
-  if(s.nvisSectors&&s.nightLdg) e.flight_nightVisionGoggleLandings=s.nightLdg;
+  if(s.nvgTO) e.flight_nightVisionGoggleTakeoffs=s.nvgTO;
+  if(s.nvgLdg) e.flight_nightVisionGoggleLandings=s.nvgLdg;
+  if(s.pax) e.flight_paxCount=s.pax;   // Total Pax — only when the crew entered a positive count
   const put=(name,val)=>{ const a=slotAttr(name); if(a&&val) e[a]= a.includes("customTime")? hm(val): val; };
   put("Turbine",s.totalMin); put("Twin Turbine",s.totalMin);
   if(s.hems) put("HEMS",s.totalMin);
