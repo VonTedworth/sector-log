@@ -59,8 +59,14 @@
   .detail{display:none;border-top:1px solid var(--line);padding:12px;background:var(--paper)}
   .sector.open .detail{display:block}
   .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+  /* grid items default to min-width:auto, so an input that won't shrink (Safari sizes date inputs to
+     their native control) overflows its track and overlaps the next field — pin the floor to 0 */
+  .fld{min-width:0}
   .fld label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:2px}
-  .fld input,.fld select,.fld textarea{width:100%;font:13px var(--mono);padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+  .fld input,.fld select,.fld textarea{width:100%;min-width:0;max-width:100%;font:13px var(--mono);padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+  .fld input[type=date]{-webkit-appearance:none;appearance:none;padding-right:4px}
+  .fld input[type=date]::-webkit-date-and-time-value{text-align:left;margin:0}
+  .fld input[type=date]::-webkit-calendar-picker-indicator{margin:0;padding:0}
   .fld.wide{grid-column:1/-1}
   .fld textarea{font-family:inherit;min-height:56px;resize:vertical}
   .rowbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -196,7 +202,7 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:13, date:"2026-07-18" };
+const BUILD = { n:14, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
