@@ -196,7 +196,7 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:12, date:"2026-07-18" };
+const BUILD = { n:13, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
@@ -270,6 +270,7 @@ function parseDate(s){ const m=String(s).trim().match(/^(\d{1,2})-([A-Za-z]{3})-
 function fmtDT(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear()+" "+String(d.getUTCHours()).padStart(2,"0")+":"+String(d.getUTCMinutes()).padStart(2,"0"); }
 function fmtD(d){ return String(d.getUTCMonth()+1).padStart(2,"0")+"/"+String(d.getUTCDate()).padStart(2,"0")+"/"+d.getUTCFullYear(); }
 function shortD(d){ return String(d.getUTCDate()).padStart(2,"0")+" "+Object.keys(MONTHS)[d.getUTCMonth()]+" "+String(d.getUTCFullYear()).slice(2); }
+function isoD(d){ return (d&&!isNaN(d)) ? d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0")+"-"+String(d.getUTCDate()).padStart(2,"0") : ""; }
 function isGrid(s){ return /^[A-Z]{2}\s?\d{4,6}$/i.test(String(s||"").trim()); }
 function normGrid(s){ return isGrid(s) ? String(s).trim().toUpperCase().replace(/\s/g,"") : null; }
 function isICAO(s){ return /^[A-Z]{4}$/i.test(String(s||"").trim()); }
@@ -409,7 +410,7 @@ function tryBuild(){
     const k=String(r[0]).trim()+"|"+hm(parseHM(r[3]))+"|"+hm(parseHM(r[6]));
     xIdx[k]=r;
   }
-  sectors=[]; let unmatched=0, excludedRows=0; const unresolvedMap=new Map(), unresolvedAcMap=new Map();
+  sectors=[]; const unresolvedMap=new Map(), unresolvedAcMap=new Map();
   for(const c of rawCSV){
     if(!c["Date"]||String(c["Aircraft ID"]).trim()==="AIRMAESTRO") continue;
     const reg=String(c["Aircraft ID"]).trim();
@@ -423,8 +424,6 @@ function tryBuild(){
     const acUnresolved = !!reg && !acType && !acExcluded;
     if(acUnresolved && !unresolvedAcMap.has(reg)) unresolvedAcMap.set(reg, reg);
     const sim = acExcluded; // excluded regs (sim/foreign) are logged manually, not imported
-    if(sim) excludedRows++;
-    if(!x && !sim && !acUnresolved) unmatched++;
 
     // Zulu datetimes. xlsx: [2]=depZ [3]=depL [5]=arrZ [6]=arrL. CSV Out/Off/On/In are LOCAL.
     const depZ=x?parseHM(x[2]):null, depL=x?parseHM(x[3]):parseHM(c["Out"]);
@@ -534,11 +533,18 @@ function tryBuild(){
   unresolvedPlaces=[...unresolvedMap.values()];
   unresolvedAircraft=[...unresolvedAcMap.values()];
   msg.textContent="";
+  refreshBatchWarnings();
+  render();
+}
+// Unmatched/excluded batch warnings, computed from the current sectors so they stay correct after an
+// in-place aircraft re-apply (which doesn't rebuild from raw and so preserves manual edits).
+function refreshBatchWarnings(){
+  const unmatched=sectors.filter(s=>!s.matched && !s.sim && !s.regUnresolved).length;
+  const excluded=sectors.filter(s=>s.sim).length;
   const warn=[];
   if(unmatched) warn.push(unmatched+" sector(s) could not be matched between the two files — check their times before sending.");
-  if(excludedRows) warn.push(excludedRows+" excluded aircraft row(s) won't be imported — log those manually.");
+  if(excluded) warn.push(excluded+" excluded aircraft row(s) won't be imported — log those manually.");
   document.getElementById("warnings").innerHTML=warn.map(w=>`<div class="warnbar">${esc(w)}</div>`).join("");
-  render();
 }
 
 /* ================= render ================= */
@@ -617,6 +623,8 @@ function detailForm(s,i){
     (s.fromScene?G("Dep scene grid","depGrid",s.depGrid,s.fromScene&&!s.depGrid):"")+
     (s.toScene?G("Arr scene grid","arrGrid",s.arrGrid,s.toScene&&!s.arrGrid):"");
   return `<div class="fgrid">
+    <div class="fld"><label>Date</label><input type="date" value="${isoD(s.date)}" onchange="upd(${i},'date',this.value);render()"></div>
+    <div class="fld"><label>Reg</label><input value="${esc(s.reg)}" onchange="upd(${i},'reg',this.value);render()"></div>
     ${F("From","from",s.from)}${F("To","to",s.to)}
     ${F("Commander","commander",s.commander)}
     ${F("Total","totalMin",hm(s.totalMin))}${F("Night","nightMin",hm(s.nightMin))}
@@ -640,6 +648,14 @@ function toggleCap(i){ sectors[i].capacity = sectors[i].capacity==="SIC" ? "P1u/
 function upd(i,prop,val){
   const s=sectors[i];
   if(["totalMin","nightMin","nvgMin","actInstMin"].includes(prop)) s[prop]=parseHM(val)??0;
+  else if(prop==="date"){ // shift the flight date and all four Zulu times by the same whole-day delta,
+    const m=String(val).match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m) return;   // preserving times-of-day
+    const nd=new Date(Date.UTC(+m[1],+m[2]-1,+m[3])), delta=nd.getTime()-s.date.getTime(); if(!delta) return;
+    s.date=nd;
+    ["outZ","offZ","onZ","inZ"].forEach(p=>{ if(s[p]) s[p]=new Date(s[p].getTime()+delta); }); // rollovers intact
+    sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
+  }
+  else if(prop==="reg"){ applyAircraft(s,val); recomputeUnresolvedAircraft(); refreshBatchWarnings(); } // re-run aircraft rules
   else if(prop==="pax"){ const n=parseInt(val); s.pax = Number.isFinite(n)&&n>0 ? n : null; } // blank/0 -> omit
   else if(["dayTO","dayLdg","nightTO","nightLdg","nvgTO","nvgLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;
   else if(prop==="depGrid"||prop==="arrGrid"){ // normalise to uppercase; invalid stays unset (still flagged)
@@ -860,6 +876,33 @@ function addOrUpdateUserSite(displayName, rooftop, rawName){
 }
 function persistUserSites(){ localStorage.setItem(LS.usersites, JSON.stringify(userSites)); }
 
+/* ================= aircraft logic (shared by import, reg edit, and resolver) ================= */
+// Re-run the aircraft rules for one sector against a reg: known -> import with its type; excluded ->
+// skip; otherwise unresolved (surfaces in the resolver, blocks Send). Mirrors tryBuild's per-row
+// logic so a per-sector reg edit behaves exactly as if the reg had arrived in the import.
+function applyAircraft(s, reg){
+  reg=String(reg||"").trim().toUpperCase();
+  const acType=aircraft[reg], acExcluded=excludedRegs.has(reg), acUnresolved=!!reg && !acType && !acExcluded;
+  const wasSim=s.sim;
+  s.reg=reg;
+  s.type=acType||AW169_REGS[reg]||"AW169";
+  s.sim=acExcluded;
+  s.regUnresolved=acUnresolved;
+  s.include=!!acType;                              // only confirmed-known aircraft are imported
+  if(s.sim!==wasSim) s.hems = !s.training && !s.sim; // import status flipped -> re-derive HEMS default
+}
+function recomputeUnresolvedAircraft(){
+  const m=new Map();
+  for(const s of sectors) if(s.regUnresolved && !m.has(s.reg)) m.set(s.reg, s.reg);
+  unresolvedAircraft=[...m.values()];
+}
+// Re-apply aircraft rules across every sector in place (no rebuild from raw, so manual edits survive).
+function reapplyAircraftAll(){
+  for(const s of sectors) applyAircraft(s, s.reg);
+  recomputeUnresolvedAircraft();
+  refreshBatchWarnings();
+}
+
 /* ================= unknown aircraft resolution ================= */
 function openAircraft(){
   document.getElementById("aircraftList").innerHTML=unresolvedAircraft.map(reg=>{
@@ -883,7 +926,7 @@ function saveAircraft(){
   localStorage.setItem(LS.aircraft, JSON.stringify(aircraft));
   localStorage.setItem(LS.excluded, JSON.stringify([...excludedRegs]));
   document.getElementById("aircraftModal").classList.remove("open");
-  if(rawCSV&&rawXLSX) tryBuild();
+  reapplyAircraftAll(); render();   // in place, so per-sector date/reg/pax edits are preserved
 }
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) m.classList.remove("open"); }));
 document.getElementById("buildStamp").textContent="build "+BUILD.n+" · "+BUILD.date;
