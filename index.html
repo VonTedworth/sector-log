@@ -64,6 +64,7 @@
   .fld{min-width:0}
   .fld label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:2px}
   .fld input,.fld select,.fld textarea{width:100%;min-width:0;max-width:100%;font:13px var(--mono);padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+  .fld input[readonly]{background:var(--paper);color:var(--ink-soft)}
   .fld input[type=date]{-webkit-appearance:none;appearance:none;padding-right:4px}
   .fld input[type=date]::-webkit-date-and-time-value{text-align:left;margin:0}
   .fld input[type=date]::-webkit-calendar-picker-indicator{margin:0;padding:0}
@@ -202,7 +203,7 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:14, date:"2026-07-18" };
+const BUILD = { n:15, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
@@ -406,6 +407,34 @@ function buildRemarks(s){
   return segs.length ? "GAMA - "+segs.join(" | ") : "GAMA";
 }
 
+/* ================= rotor times ================= */
+// Out/In are the rotors-running times and the source of truth for Total. Editing either sets that
+// time-of-day on its own UTC day, then re-seats In on Out's day — rolling to the next day when In's
+// clock time is earlier than Out's, which preserves a past-midnight sector. Total is recomputed from
+// In − Out. A manual edit means the times are user-set, so the automatic +5/+1 rotor correction no
+// longer applies and its flag clears. Off/On are left exactly as HCM provided.
+function utcMidnight(d){ return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
+function clockMin(d){ return d.getUTCHours()*60 + d.getUTCMinutes(); }
+// Out <= Off <= On <= In must hold; an edit can break it because Off/On stay put. Flag, don't clamp.
+function timesOutOfOrder(s){
+  const t=[s.outZ,s.offZ,s.onZ,s.inZ].filter(Boolean).map(d=>d.getTime());
+  for(let i=1;i<t.length;i++) if(t[i]<t[i-1]) return true;
+  return false;
+}
+function setRotorTime(s, which, val){
+  const mins=parseHM(val); if(mins==null) return;
+  const anchor = s.outZ || s.inZ || s.date; if(!anchor) return;
+  if(which==="outZ") s.outZ = new Date(utcMidnight(s.outZ||anchor).getTime()+mins*60000);
+  else               s.inZ  = new Date(utcMidnight(s.inZ ||anchor).getTime()+mins*60000);
+  if(s.outZ && s.inZ){
+    const om=clockMin(s.outZ), im=clockMin(s.inZ);
+    s.inZ = new Date(utcMidnight(s.outZ).getTime() + im*60000 + (im<om ? 86400000 : 0));
+    s.totalMin = Math.round((s.inZ.getTime()-s.outZ.getTime())/60000);
+  }
+  s.rotorAdj=false;                       // times are user-set now; the +5/+1 correction is overridden
+  s.timesOutOfOrder = timesOutOfOrder(s);
+}
+
 /* ================= build sectors ================= */
 function tryBuild(){
   const msg=document.getElementById("parseMsg");
@@ -499,7 +528,7 @@ function tryBuild(){
       date, dateStr:String(c["Date"]).trim(),
       reg, type:acType||AW169_REGS[reg]||"AW169", sim, regUnresolved:acUnresolved,
       from:from.place, to:to.place, blankPlaces:from.blank||to.blank,
-      outZ,offZ,onZ,inZ, totalMin, nightMin, rotorAdj,
+      outZ,offZ,onZ,inZ, totalMin, nightMin, rotorAdj, timesOutOfOrder:false,
       ifrMin:parseHM(x?x[17]:c["IFR"])||0,
       actInstMin:rk.actInstMin,
       capacity:"SIC",            // default per Ed; toggle to P1u/s per sector
@@ -589,6 +618,7 @@ function render(){
     if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
     if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
     if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
+    if(s.timesOutOfOrder) chips.push('<span class="chip warn">TIMES OUT OF ORDER</span>');
     if(s.gridInferred) chips.push('<span class="chip">GRID←PREV</span>');
     if(s.sceneGridMissing) chips.push('<span class="chip warn">SCENE GRID MISSING</span>');
     if(s.hems) chips.push(`<span class="chip">HEMS</span>`);
@@ -628,12 +658,18 @@ function detailForm(s,i){
   const sceneFlds =
     (s.fromScene?G("Dep scene grid","depGrid",s.depGrid,s.fromScene&&!s.depGrid):"")+
     (s.toScene?G("Arr scene grid","arrGrid",s.arrGrid,s.toScene&&!s.arrGrid):"");
+  // Rotor times (Zulu HH:MM). Total is derived from In − Out so the three can't disagree; it stays
+  // editable only when a time is missing and so can't be derived (e.g. an UNMATCHED blank-times row).
+  const T=(label,prop,d)=>`<div class="fld"><label>${label}</label><input value="${d?fmtDT(d).slice(11):""}" placeholder="HH:MM" onchange="upd(${i},'${prop}',this.value);render()"></div>`;
+  const totalFld = (s.outZ&&s.inZ)
+    ? `<div class="fld"><label>Total</label><input value="${esc(hm(s.totalMin))}" readonly title="Derived from Out/In"></div>`
+    : F("Total","totalMin",hm(s.totalMin));
   return `<div class="fgrid">
     <div class="fld"><label>Date</label><input type="date" value="${isoD(s.date)}" onchange="upd(${i},'date',this.value);render()"></div>
     <div class="fld"><label>Reg</label><input value="${esc(s.reg)}" onchange="upd(${i},'reg',this.value);render()"></div>
     ${F("From","from",s.from)}${F("To","to",s.to)}
     ${F("Commander","commander",s.commander)}
-    ${F("Total","totalMin",hm(s.totalMin))}${F("Night","nightMin",hm(s.nightMin))}
+    ${T("Out (Z)","outZ",s.outZ)}${T("In (Z)","inZ",s.inZ)}${totalFld}${F("Night","nightMin",hm(s.nightMin))}
     ${F("NVG time","nvgMin",hm(s.nvgMin))}${F("Act inst","actInstMin",hm(s.actInstMin))}
     ${F("Day T/O","dayTO",s.dayTO)}${F("Day Ldg","dayLdg",s.dayLdg)}
     ${F("Night T/O","nightTO",s.nightTO)}${F("Night Ldg","nightLdg",s.nightLdg)}
@@ -661,6 +697,7 @@ function upd(i,prop,val){
     ["outZ","offZ","onZ","inZ"].forEach(p=>{ if(s[p]) s[p]=new Date(s[p].getTime()+delta); }); // rollovers intact
     sectors.sort((a,b)=>a.outZ&&b.outZ? a.outZ-b.outZ : a.date-b.date);
   }
+  else if(prop==="outZ"||prop==="inZ"){ setRotorTime(s,prop,val); } // recomputes Total, clears ROTOR +6
   else if(prop==="reg"){ applyAircraft(s,val); recomputeUnresolvedAircraft(); refreshBatchWarnings(); } // re-run aircraft rules
   else if(prop==="pax"){ const n=parseInt(val); s.pax = Number.isFinite(n)&&n>0 ? n : null; } // blank/0 -> omit
   else if(["dayTO","dayLdg","nightTO","nightLdg","nvgTO","nvgLdg","platTO","platLdg","nvisSectors","ifrSectors","app3D","app2D"].includes(prop)) s[prop]=parseInt(val)||0;

@@ -2,7 +2,7 @@
 
 Single-page web app. Upload both HCM exports (Excel + LogTen CSV) from the same date range, review the derived sectors, resolve anything flagged, tap Send — LogTen opens and asks to import. Deployed to GitHub Pages at **https://vontedworth.github.io/sector-log/**. Works offline after first load except for the two CDN libraries (PapaParse, SheetJS).
 
-**Current build: 12** (shown top of the page as `build N · date`). Bump the `BUILD` constant in `index.html` on every commit so the running version is verifiable on the device.
+**Current build: 15** (shown top of the page as `build N · date`). Bump the `BUILD` constant in `index.html` on every commit so the running version is verifiable on the device.
 
 The app **only references LogTen places by name and writes grids into remarks** — it never creates or modifies places or aircraft in LogTen, and never sends coordinates.
 
@@ -22,7 +22,11 @@ Rows are joined on **date + local Out + local In** (verified unique across 230 r
 
 - **AirMaestro placeholder rows** (`Aircraft ID = AIRMAESTRO`, pre-HCM FTL imports) are dropped.
 - **Zulu conversion**: offset taken per-sector from the Excel's own (L)−(Z) columns; midnight rollovers handled by monotonic ordering Out ≤ Off ≤ On ≤ In.
-- **Rotor-time correction**: some pilots enter identical rotor and airborne times (Out = Off, On = In). Ed logs rotors-running time, so when they're equal the app subtracts 5 min from the start and adds 1 min to the stop and recomputes total. Flagged `ROTOR +6`; times stay editable.
+- **Rotor-time correction**: some pilots enter identical rotor and airborne times (Out = Off, On = In). Ed logs rotors-running time, so when they're equal the app subtracts 5 min from the start and adds 1 min to the stop and recomputes total. Flagged `ROTOR +6`.
+- **Rotor times are editable** (Zulu HH:MM) when HCM has them wrong. **Total is derived from In − Out**, not entered separately, so the three can never disagree — it shows read-only on the review panel. Editing In whose clock time is earlier than Out rolls it to the next day, preserving a past-midnight sector. A manual edit means the times are user-set, so it overrides the automatic +5/+1 correction and clears the `ROTOR +6` flag. Two deliberate exceptions:
+  - If Out or In is missing (a blank-times `UNMATCHED` row), Total can't be derived, so it stays editable until both times are entered — then it becomes derived and read-only.
+  - Off/On (takeoff/landing) are left exactly as HCM provided. Because of that an edit can break the `Out ≤ Off ≤ On ≤ In` ordering, which is flagged `TIMES OUT OF ORDER` on the sector rather than silently clamped or auto-corrected. It does not block Send — it's there for you to judge.
+- **Date and registration are editable per sector**, for when HCM has them wrong. Correcting the date shifts the flight date and all four Zulu times (Out/Off/On/In) by the same whole-day delta, so times-of-day and past-midnight rollovers survive, and the batch re-sorts. Correcting the registration re-runs the aircraft rules: a known reg picks up its type; an unknown one routes through the aircraft resolver and blocks Send until you add or exclude it — never silently accepted. The flight key stays the HCM-derived key throughout, so re-sending a corrected sector **updates** the existing LogTen entry rather than duplicating it.
 - **Capacity**: every sector defaults to **SIC**. PICUS is a crew-room decision, so it is a one-tap toggle per sector (SIC ⇄ P1u/s). Crew names are unaffected: PIC/P1 crew = commander from the Excel (first non-SELF name), SIC/P2 crew = Edward Worsley, matching existing LogTen convention.
 - **Takeoff/landing counts come only from the crew-entered `1x …` remark lines.** The CSV's Day T/O and Day Ldg columns are hardcoded 1/1 in every row (including night sectors) and are ignored. An absent line means the other pilot handled it — zero is logged. All counts editable per sector.
 - **Remark line → field mapping**:
