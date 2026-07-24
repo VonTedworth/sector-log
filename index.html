@@ -203,7 +203,7 @@
 "use strict";
 /* ================= configuration & persistence ================= */
 // Build stamp — bump BUILD.n and set BUILD.date on every commit so the running version is verifiable.
-const BUILD = { n:15, date:"2026-07-18" };
+const BUILD = { n:16, date:"2026-07-18" };
 const LS = { map:"sl_mapping3", alias:"sl_aliases", imported:"sl_imported", cal:"sl_calibrated", aircraft:"sl_aircraft", excluded:"sl_excluded", usersites:"sl_usersites" };
 const SELF_NAME = "Edward Worsley";
 const APP_META = { application:"Sector Log", version:"1.0", serviceID:"uk.worsley.sectorlog",
@@ -231,8 +231,8 @@ const DEFAULT_ALIASES = {
   "rochester airport - kss hq":"EGTO",
   "l01 kings collage hospital london":"KINGS COLLEGE HOSPITAL LONDON",
   "kings college hospital":"KINGS COLLEGE HOSPITAL LONDON",
-  "l03 st. georges hospital london":"ST GEORGES HOSPITAL LONDON",
-  "st georges hospital":"ST GEORGES HOSPITAL LONDON",
+  "l03 st. georges hospital london":"ST GEORGE'S HOSPITAL",
+  "st georges hospital":"ST GEORGE'S HOSPITAL",
   "se01 william harvey hospital ashford":"WILLIAM HARVEY HOSPITAL",
   "lkch ruskin park":"KINGS COLLEGE HOSPITAL LONDON",
 };
@@ -247,7 +247,7 @@ const KNOWN_SITES = [
   { id:"EGMD", variants:["Lydd"], rooftop:false, scene:false },
   { id:"KINGS COLLEGE HOSPITAL LONDON", variants:["Kings College Hospital","L01 Kings Collage Hospital London"], rooftop:true, scene:false },
   { id:"ST GEORGE'S HOSPITAL", variants:[], rooftop:true, scene:false },
-  { id:"WILLIAM HARVEY HOSPITAL", variants:["William Harvey","SE01 William Harvey Hospital Ashford"], rooftop:true, scene:false },
+  { id:"WILLIAM HARVEY HOSPITAL", variants:["William Harvey","SE01 William Harvey Hospital Ashford"], rooftop:false, scene:false }, // company HLS ground site, not an elevated helipad
   { id:"QUEEN ALEXANDRA HOSPITAL", variants:[], rooftop:true, scene:false },
   { id:"FRIMLEY PARK HOSPITAL", variants:[], rooftop:true, scene:false },
   // Brighton main hospital — rooftop helipad. `avoid` keeps Secondary/Alternate/East Brighton Park
@@ -293,13 +293,26 @@ function cleanSceneName(raw){
 function sceneKey(raw){ return normId(cleanSceneName(raw)); }
 // Coded-in sites plus the user's own added sites — user sites behave exactly like KNOWN_SITES.
 function allSites(){ return KNOWN_SITES.concat(userSites); }
-// Match a raw HCM name or a resolved place id against a site (id or any variant), case-, punctuation-
-// and operational-suffix tolerant (Bagshot / Bagshot HOS). `avoid` tokens block a match (keeps the
-// Brighton main off Secondary/Alternate names). Still strict otherwise — Ashford never hits Ashfield.
-function siteMatch(name){ const n=normId(name), k=sceneKey(name); if(!n) return null;
+function dropLastWord(s){ const w=String(s||"").trim().split(/\s+/); w.pop(); return w.join(" "); }
+// Do two place names refer to the same site? Case-, punctuation- (normId strips apostrophes/full
+// stops) and operational-suffix tolerant, plus one trailing city/qualifier word of slack in either
+// direction ("St Georges Hospital London" == "ST GEORGE'S HOSPITAL"). At most ONE word of difference,
+// so it stays strict otherwise — Ashford never hits Ashfield, and A-B-London never hits A-B-Ashford.
+function siteNameMatch(a, b){
+  const na=normId(a), nb=normId(b); if(!na||!nb) return false;
+  if(na===nb) return true;
+  if(sceneKey(a)===sceneKey(b)) return true;               // operational suffix (HOS/RTC/OOH/HLS)
+  const da=dropLastWord(a), db=dropLastWord(b);
+  if(da && normId(da)===nb) return true;                   // a has one extra trailing qualifier word
+  if(db && normId(db)===na) return true;                   // b has one extra trailing qualifier word
+  return false;
+}
+// Match a raw HCM name or a resolved place id against a site (id or any variant). `avoid` tokens block
+// a match (keeps the Brighton main off Secondary/Alternate names).
+function siteMatch(name){ const n=normId(name); if(!n) return null;
   return allSites().find(s=>{
     if(s.avoid && s.avoid.some(a=>n.includes(a))) return false;
-    return [s.id, ...s.variants].some(v=> normId(v)===n || sceneKey(v)===k);
+    return [s.id, ...s.variants].some(v=> siteNameMatch(name, v));
   }) || null; }
 function isKnownSiteId(v){ return !!siteMatch(v) || Object.values(aliases).some(x=>normId(x)===normId(v)); }
 function isKnownPlace(raw){
@@ -382,11 +395,11 @@ function aliasPlace(name){
   if(!t) return {place:"", grid:null, blank:true, scene:false, rooftop:false};
   if(isGrid(t)) return {place:"KSS HEMS SITE", grid:normGrid(t), blank:false, scene:true, rooftop:false};
   // Resolution order: user-saved alias, then known-site variant, then the name as-is (uppercased).
-  let placeId = aliases[t.toLowerCase()];
-  if(!placeId){ const s=siteMatch(t); if(s) placeId=s.id; }
-  if(!placeId) placeId = t.toUpperCase();
+  let placeId = aliases[t.toLowerCase()] || t.toUpperCase();
+  // Resolve to the canonical known-site id when it matches one, so its rooftop/scene flags apply even
+  // if the alias target spells it differently (e.g. "ST GEORGES HOSPITAL LONDON" -> "ST GEORGE'S HOSPITAL").
   const site=siteMatch(placeId);
-  return { place:placeId, grid:null, blank:false,
+  return { place: site ? site.id : placeId, grid:null, blank:false,
            scene: (site? site.scene : false) || normId(placeId)===normId("KSS HEMS SITE"),
            rooftop: site? site.rooftop : false };
 }
@@ -432,6 +445,7 @@ function setRotorTime(s, which, val){
     s.totalMin = Math.round((s.inZ.getTime()-s.outZ.getTime())/60000);
   }
   s.rotorAdj=false;                       // times are user-set now; the +5/+1 correction is overridden
+  s.totalDiffersFromHcm = !!(s.outZ&&s.inZ) && s.hcmTotalMin!=null && Math.abs(s.totalMin-s.hcmTotalMin)>1;
   s.timesOutOfOrder = timesOutOfOrder(s);
 }
 
@@ -452,7 +466,8 @@ function tryBuild(){
     const key=String(c["Date"]).trim()+"|"+hm(parseHM(c["Out"]))+"|"+hm(parseHM(c["In"]))
     const x=xIdx[key];
     const date=parseDate(c["Date"]);
-    let totalMin=parseHM(c["Total Time"]);
+    const hcmTotalMin=parseHM(c["Total Time"]); // HCM's stated total — unreliable (often airborne, sometimes wrong)
+    let totalMin=hcmTotalMin;                   // fallback only when a rotor time is missing
     // Aircraft: never assume a reg is already in LogTen. Known -> import; excluded -> skip; else surface.
     const acType = aircraft[reg];
     const acExcluded = excludedRegs.has(reg);
@@ -481,7 +496,12 @@ function tryBuild(){
     let rotorAdj=false;
     if(outZ&&offZ&&outZ.getTime()===offZ.getTime()){ outZ=new Date(outZ.getTime()-5*60000); rotorAdj=true; }
     if(inZ&&onZ&&inZ.getTime()===onZ.getTime()){ inZ=new Date(inZ.getTime()+60000); rotorAdj=true; }
-    if(rotorAdj&&outZ&&inZ) totalMin=Math.round((inZ.getTime()-outZ.getTime())/60000);
+    // Rotor times are the source of truth (Ed logs rotors-running). Derive Total from In − Out whenever
+    // both exist — past-midnight is already handled by the monotonic Out<=Off<=On<=In ordering above.
+    // Flag (don't block) where the derived total disagrees with HCM's column by >1 min, so the sectors
+    // HCM got wrong are visible. The rotor +5/+1 case already has its own ROTOR +6 chip, so skip it there.
+    if(outZ&&inZ) totalMin=Math.round((inZ.getTime()-outZ.getTime())/60000);
+    const totalDiffersFromHcm = !rotorAdj && !!(outZ&&inZ) && hcmTotalMin!=null && Math.abs(totalMin-hcmTotalMin)>1;
 
     const nightMin=parseHM(x?x[16]:c["Night"])||0;
     const rk=parseRemarks(c["Remarks"], nightMin, totalMin);
@@ -528,7 +548,7 @@ function tryBuild(){
       date, dateStr:String(c["Date"]).trim(),
       reg, type:acType||AW169_REGS[reg]||"AW169", sim, regUnresolved:acUnresolved,
       from:from.place, to:to.place, blankPlaces:from.blank||to.blank,
-      outZ,offZ,onZ,inZ, totalMin, nightMin, rotorAdj, timesOutOfOrder:false,
+      outZ,offZ,onZ,inZ, totalMin, hcmTotalMin, totalDiffersFromHcm, nightMin, rotorAdj, timesOutOfOrder:false,
       ifrMin:parseHM(x?x[17]:c["IFR"])||0,
       actInstMin:rk.actInstMin,
       capacity:"SIC",            // default per Ed; toggle to P1u/s per sector
@@ -618,6 +638,7 @@ function render(){
     if(s.ifrSectors) chips.push(`<span class="chip on">IFR SEC×${s.ifrSectors}</span>`);
     if(s.actInstMin) chips.push(`<span class="chip on">INST ${hm(s.actInstMin)}</span>`);
     if(s.rotorAdj) chips.push('<span class="chip warn">ROTOR +6</span>');
+    if(s.totalDiffersFromHcm) chips.push(`<span class="chip warn">HCM TOT ${hm(s.hcmTotalMin)}</span>`);
     if(s.timesOutOfOrder) chips.push('<span class="chip warn">TIMES OUT OF ORDER</span>');
     if(s.gridInferred) chips.push('<span class="chip">GRID←PREV</span>');
     if(s.sceneGridMissing) chips.push('<span class="chip warn">SCENE GRID MISSING</span>');
